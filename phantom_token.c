@@ -229,6 +229,13 @@ static ngx_int_t handler(ngx_http_request_t *request)
     }
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "Handling request to convert token to JWT");
+    
+    // return OK if the method is OPTIONS
+    if (request->method == NGX_HTTP_OPTIONS) {
+        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "Allow because of OPTIONS method");
+        return NGX_OK;
+    }
+
 
     if (module_location_config->base64encoded_client_credential.len == 0)
     {
