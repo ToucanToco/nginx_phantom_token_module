@@ -3,7 +3,7 @@
 # http://nginx.org/en/linux_packages.html#Debian
 #
 
-FROM debian:buster
+FROM debian:bookworm
 ARG NGINX_DEPLOY_VERSION
 
 RUN apt update
@@ -18,4 +18,4 @@ http://nginx.org/packages/mainline/debian `lsb_release -cs` nginx" \
 
 # 'apt list -a nginx' shows versions available
 RUN apt update
-RUN apt install -y nginx=$NGINX_DEPLOY_VERSION-1~buster valgrind
+RUN apt install -y nginx=$NGINX_DEPLOY_VERSION-1~bookworm valgrind
