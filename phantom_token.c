@@ -330,7 +330,7 @@ static ngx_int_t handler(ngx_http_request_t *request)
                     "Introspection request from %V failed with status code "
                     "(server responded): %d",
                     &request->connection->addr_text, module_context->status);
-                return write_error_response(request, NGX_HTTP_BAD_GATEWAY,
+                return write_error_response(request, module_context->status,
                                             module_location_config);
             }
 
