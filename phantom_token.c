@@ -14,12 +14,12 @@
  *  limitations under the License.
  */
 
+#include <assert.h>
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
 #include <ngx_string.h>
 #include <stdbool.h>
-#include <assert.h>
 
 #define UNENCODED_CLIENT_CREDENTIALS_BUF_LEN 255
 
@@ -293,6 +293,8 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
                     if ((result = set_accept_header_value(request, "*/*") != NGX_OK))
                     {
+                        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                                      "Failed to set Accept header value");
                         return result;
                     }
                 }
@@ -305,6 +307,10 @@ static ngx_int_t handler(ngx_http_request_t *request)
             }
             else if (module_context->status == NGX_HTTP_NO_CONTENT)
             {
+                ngx_log_error(
+                    NGX_LOG_ERR, request->connection->log, 0,
+                    "Introspection request from %V failed with no content: %d",
+                    &request->connection->addr_text, module_context->status);
                 return set_www_authenticate_header(request, module_location_config, NULL);
             }
             else if (module_context->status == NGX_HTTP_SERVICE_UNAVAILABLE)
@@ -345,7 +351,8 @@ static ngx_int_t handler(ngx_http_request_t *request)
     // return unauthorized when no Authorization header is present
     if (!request->headers_in.authorization || request->headers_in.authorization->value.len <= 0)
     {
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "Authorization header not present");
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Authorization header not present");
 
         return set_www_authenticate_header(request, module_location_config, NULL);
     }
@@ -357,8 +364,8 @@ static ngx_int_t handler(ngx_http_request_t *request)
     {
         // return unauthorized when Authorization header is not Bearer
 
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0,
-                       "Authorization header does not contain a bearer token");
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Authorization header does not contain a bearer token");
 
         return set_www_authenticate_header(request, module_location_config, NULL);
     }
@@ -395,6 +402,8 @@ static ngx_int_t handler(ngx_http_request_t *request)
     if (ngx_http_subrequest(request, &module_location_config->introspection_endpoint, NULL, &introspection_request,
                             introspection_request_callback, NGX_HTTP_SUBREQUEST_WAITED) != NGX_OK)
     {
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Failed to create subrequest to introspection endpoint");
         write_error_response(request, NGX_HTTP_INTERNAL_SERVER_ERROR, module_location_config);
     }
 
@@ -658,10 +667,6 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *sr,
         (phantom_token_module_context_t *)data;
     ngx_int_t ret = NGX_ERROR;
 
-    ngx_log_error(NGX_LOG_DEBUG, sr->connection->log, 0,
-                  "Subrequest to %V return %d with status %d", &sr->uri, rc,
-                  sr->headers_out.status);
-
     module_context->status = sr->headers_out.status;
 
     // fail early for not 200 response
@@ -685,9 +690,11 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *sr,
     if (ret != NGX_OK) {
         ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
                       "Subrequest to %V failed to read introspection response "
-                      "(status: %d).",
+                      "(status was %d)",
                       &sr->uri, sr->headers_out.status);
     }
+
+    module_context->done = 1;
 
     return ret;
 }
@@ -704,6 +711,9 @@ static ngx_int_t read_introspection_response_from_cache(
     ngx_str_t cache_data = ngx_null_string;
     ngx_int_t ret = NGX_ERROR;
 
+    ngx_log_error(NGX_LOG_DEBUG, sr->connection->log, 0,
+                  "Reading introspection response from cache");
+
     if (jwt_start == NULL && sr->cache && sr->cache->buf &&
         sr->cache->valid_sec > 0) {
         // Try to read JWT from cache
@@ -712,7 +722,7 @@ static ngx_int_t read_introspection_response_from_cache(
         cache_data.data = ngx_pnalloc(sr->pool, cache_data.len);
         if (cache_data.data == NULL) {
             ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
-                          "Failed to allocate memory for cache data.");
+                          "Failed to allocate memory for cache data");
             goto end;
         }
 
@@ -721,12 +731,14 @@ static ngx_int_t read_introspection_response_from_cache(
         jwt_start = cache_data.data;
     } else {
         // Cache is not good.
+        ngx_log_error(NGX_LOG_DEBUG, sr->connection->log, 0,
+                      "Cache seems unavailable");
         goto end;
     }
 
     if (jwt_start == NULL) {
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, sr->connection->log, 0,
-                       "Failed to obtain JWT from introspection cache");
+        ngx_log_error(NGX_LOG_DEBUG, sr->connection->log, 0,
+                      "Failed to obtain JWT from introspection cache");
         goto end;
     }
 
@@ -737,7 +749,7 @@ static ngx_int_t read_introspection_response_from_cache(
     module_context->jwt.data = ngx_pnalloc(sr->pool, bearer_jwt_len);
     if (module_context->jwt.data == NULL) {
         ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
-                      "Failed to allocate memory for JWT token.");
+                      "Failed to allocate memory for JWT token");
         goto end;
     }
 
@@ -758,19 +770,31 @@ read_introspection_response(ngx_http_request_t *sr,
                             phantom_token_module_context_t *module_context) {
 
     // Access the response body from the subrequest
-    ngx_chain_t *cl = sr->out;
     size_t jwt_len = 0;
 
-    // Step 1: Calculate total length of the JWT in the response body
-    for (cl = sr->out; cl; cl = cl->next) {
-        ngx_buf_t *buf = cl->buf;
-        if (ngx_buf_in_memory(buf)) {
-            jwt_len += buf->last - buf->pos;
-        }
+    if (sr->upstream->buffer.pos == NULL || sr->upstream->buffer.last == NULL) {
+        ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
+                      "No data in the buffer");
+        return NGX_ERROR;
     }
 
-    ngx_log_error(NGX_LOG_DEBUG, sr->connection->log, 0,
-                  "Calculated total JWT length: %zu", jwt_len);
+    // Check if buffer is maxed out
+    if (sr->upstream->buffer.last == sr->upstream->buffer.end) {
+        ngx_log_error(NGX_LOG_CRIT, sr->connection->log, 0,
+                      "Buffer is maxed out, check the proxy_buffer_size");
+        module_context->status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+        return NGX_ERROR;
+    }
+
+    jwt_len = sr->upstream->buffer.last - sr->upstream->buffer.pos;
+
+    if (jwt_len == 0) {
+        ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
+                      "No JWT token found in introspection response");
+        module_context->status = NGX_HTTP_NO_CONTENT;
+
+        return NGX_ERROR;
+    }
 
     size_t bearer_jwt_len = BEARER_SIZE + jwt_len;
 
@@ -778,8 +802,7 @@ read_introspection_response(ngx_http_request_t *sr,
     module_context->jwt.data = ngx_pnalloc(sr->pool, bearer_jwt_len);
     if (module_context->jwt.data == NULL) {
         ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
-                      "Failed to allocate memory for JWT token.");
-        module_context->done = 1;
+                      "Failed to allocate memory for JWT token");
         module_context->status = NGX_HTTP_INTERNAL_SERVER_ERROR;
 
         return NGX_ERROR;
@@ -787,14 +810,8 @@ read_introspection_response(ngx_http_request_t *sr,
 
     // Step 2: Copy the JWT into the module context
     u_char *p = ngx_copy(module_context->jwt.data, BEARER, BEARER_SIZE);
-    for (cl = sr->out; cl; cl = cl->next) {
-        ngx_buf_t *buf = cl->buf;
-        if (ngx_buf_in_memory(buf)) {
-            size_t len = buf->last - buf->pos;
-            ngx_memcpy(p, buf->pos, len);
-            p += len;
-        }
-    }
+    // Copy the body from the buffer to the output buffer
+    ngx_memcpy(p, sr->upstream->buffer.pos, jwt_len);
 
     module_context->done = 1;
 
@@ -946,21 +963,21 @@ static ngx_int_t write_error_response(ngx_http_request_t *request, ngx_int_t sta
         if (status == NGX_HTTP_UNAUTHORIZED)
         {
             ngx_str_set(&code, "unauthorized_request");
-            ngx_str_set(&message, "Access denied due to missing, invalid or expired credentials");
+            ngx_str_set(&message, "Access denied due to missing, invalid or expired credentials.");
         } else if (status >= 400 && status < 500) {
             ngx_str_set(&code, "client_error");
             ngx_str_set(&message,
                         "Problem encountered processing the request.");
         } else if (status == NGX_HTTP_SERVICE_UNAVAILABLE) {
             ngx_str_set(&code, "service_unavailable");
-            ngx_str_set(&message, "Service unavailable");
+            ngx_str_set(&message, "Service unavailable. Please contact the administrator.");
         } else {
             ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                           "Internal server error encountered when processing "
-                          "the request");
+                          "the request.");
             ngx_str_set(&code, "server_error");
             ngx_str_set(&message, "Internal server error encountered when "
-                                  "processing the request");
+                                  "processing the request. Please contact the administrator.");
         }
 
         /* The string length calculation replaces the two '%V' markers with their actual values */

@@ -60,7 +60,7 @@ if [[ ! -r $NGINX_TARBALL ]]; then
   $DOWNLOAD_PROGRAM https://nginx.org/download/nginx-"${NGINX_VERSION}".tar.gz
 fi
 
-docker build --no-cache -t nginx-module-builder \
+docker build -t nginx-module-builder \
   --build-arg NGINX_VERSION="$NGINX_VERSION" \
   -f builders/$LINUX_DISTRO.Dockerfile .
 if [ $? -ne 0 ]; then
