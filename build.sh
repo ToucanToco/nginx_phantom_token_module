@@ -11,6 +11,7 @@ LINUX_DISTRO=${LINUX_DISTRO:-alpine}
 if [ "$LINUX_DISTRO" != 'alpine' ] &&
    [ "$LINUX_DISTRO" != 'debian11' ] &&
    [ "$LINUX_DISTRO" != 'debian12' ] &&
+   [ "$LINUX_DISTRO" != 'ubuntu18' ] &&
    [ "$LINUX_DISTRO" != 'ubuntu20' ] &&
    [ "$LINUX_DISTRO" != 'ubuntu22' ] &&
    [ "$LINUX_DISTRO" != 'ubuntu24' ] &&
@@ -28,6 +29,8 @@ function getLibraryPrefix() {
     echo 'debian.bullseye'
   elif [ "$LINUX_DISTRO" == 'debian12' ]; then
     echo 'debian.bookworm'
+  elif [ "$LINUX_DISTRO" == 'ubuntu18' ]; then
+    echo 'ubuntu.18.04'
   elif [ "$LINUX_DISTRO" == 'ubuntu20' ]; then
     echo 'ubuntu.20.04'
   elif [ "$LINUX_DISTRO" == 'ubuntu22' ]; then
@@ -57,7 +60,7 @@ if [[ ! -r $NGINX_TARBALL ]]; then
   $DOWNLOAD_PROGRAM https://nginx.org/download/nginx-"${NGINX_VERSION}".tar.gz
 fi
 
-docker build --no-cache -t nginx-module-builder \
+docker build -t nginx-module-builder \
   --build-arg NGINX_VERSION="$NGINX_VERSION" \
   -f builders/$LINUX_DISTRO.Dockerfile .
 if [ $? -ne 0 ]; then

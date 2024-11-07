@@ -13,4 +13,4 @@ ENV NGINX_VERSION=$NGINX_VERSION
 ADD nginx-$NGINX_VERSION.tar.gz /tmp/
 
 WORKDIR /tmp
-RUN ./configure && make
+RUN ./configure && make -j $(nproc)
