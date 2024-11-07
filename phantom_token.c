@@ -319,18 +319,20 @@ static ngx_int_t handler(ngx_http_request_t *request)
             else if (module_context->status >= NGX_HTTP_INTERNAL_SERVER_ERROR || module_context->status == NGX_HTTP_NOT_FOUND
                 || module_context->status == NGX_HTTP_UNAUTHORIZED || module_context->status == NGX_HTTP_FORBIDDEN)
             {
-              ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                            "Introspection request failed with status code "
-                            "(server responded): %d",
-                            module_context->status);
-              return write_error_response(request, NGX_HTTP_BAD_GATEWAY,
-                                          module_location_config);
+                ngx_log_error(
+                    NGX_LOG_ERR, request->connection->log, 0,
+                    "Introspection request from %V failed with status code "
+                    "(server responded): %d",
+                    &request->connection->addr_text, module_context->status);
+                return write_error_response(request, NGX_HTTP_BAD_GATEWAY,
+                                            module_location_config);
             }
 
-            ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                          "Introspection request failed with status code "
-                          "(unknown error, see nginx error_logs): %d",
-                          module_context->status);
+            ngx_log_error(
+                NGX_LOG_ERR, request->connection->log, 0,
+                "Introspection request from %V failed with status code "
+                "(unknown error, see nginx error_logs): %d",
+                &request->connection->addr_text, module_context->status);
             return write_error_response(request, NGX_HTTP_INTERNAL_SERVER_ERROR, module_location_config);
         }
 
@@ -371,21 +373,19 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
     module_context =
         ngx_pcalloc(request->pool, sizeof(phantom_token_module_context_t));
-    if (module_context == NULL)
-    {
-      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                    "Failed to allocate memory for module context");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (module_context == NULL) {
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Failed to allocate memory for module context");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     ngx_http_post_subrequest_t *introspection_request_callback =
         ngx_pcalloc(request->pool, sizeof(ngx_http_post_subrequest_t));
-    if (introspection_request_callback == NULL)
-    {
-      ngx_log_error(
-          NGX_LOG_ERR, request->connection->log, 0,
-          "Failed to allocate memory for introspection request callback");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (introspection_request_callback == NULL) {
+        ngx_log_error(
+            NGX_LOG_ERR, request->connection->log, 0,
+            "Failed to allocate memory for introspection request callback");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     introspection_request_callback->handler = introspection_response_handler;
@@ -401,20 +401,18 @@ static ngx_int_t handler(ngx_http_request_t *request)
     // extract access token from header
     u_char *introspect_body_data = ngx_pcalloc(
         request->pool, request->headers_in.authorization->value.len);
-    if (introspect_body_data == NULL)
-    {
-      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                    "Failed to allocate memory for introspection body data");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (introspect_body_data == NULL) {
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Failed to allocate memory for introspection body data");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     ngx_str_t *introspection_body =
         ngx_pcalloc(request->pool, sizeof(ngx_str_t));
-    if (introspection_body == NULL)
-    {
-      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                    "Failed to allocate memory for introspection body");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (introspection_body == NULL) {
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Failed to allocate memory for introspection body");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     ngx_snprintf(introspect_body_data, request->headers_in.authorization->value.len, "token=%s", bearer_token_pos);
@@ -424,30 +422,28 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
     introspection_request->request_body =
         ngx_pcalloc(request->pool, sizeof(ngx_http_request_body_t));
-    if (introspection_request->request_body == NULL)
-    {
-      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                    "Failed to allocate memory for introspection request");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (introspection_request->request_body == NULL) {
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Failed to allocate memory for introspection request");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     ngx_http_request_body_t *introspection_request_body =
         ngx_pcalloc(request->pool, sizeof(ngx_http_request_body_t));
-    if (introspection_request_body == NULL)
-    {
-      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                    "Failed to allocate memory for introspection request body");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (introspection_request_body == NULL) {
+        ngx_log_error(
+            NGX_LOG_ERR, request->connection->log, 0,
+            "Failed to allocate memory for introspection request body");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     ngx_buf_t *introspection_request_body_buffer =
         ngx_calloc_buf(request->pool);
-    if (introspection_request_body_buffer == NULL)
-    {
-      ngx_log_error(
-          NGX_LOG_ERR, request->connection->log, 0,
-          "Failed to allocate memory for introspection request body buffer");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (introspection_request_body_buffer == NULL) {
+        ngx_log_error(
+            NGX_LOG_ERR, request->connection->log, 0,
+            "Failed to allocate memory for introspection request body buffer");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     introspection_request_body_buffer->start = introspection_request_body_buffer->pos = introspection_body->data;
@@ -520,11 +516,11 @@ static ngx_int_t handler(ngx_http_request_t *request)
     size_t authorization_header_data_len = encoded_client_credentials.len + sizeof("Basic ") - 1;
     u_char *authorization_header_data =
         ngx_pcalloc(request->pool, authorization_header_data_len);
-    if (authorization_header_data == NULL)
-    {
-      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                    "Failed to allocate memory for authorization header data");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (authorization_header_data == NULL) {
+        ngx_log_error(
+            NGX_LOG_ERR, request->connection->log, 0,
+            "Failed to allocate memory for authorization header data");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     ngx_snprintf(authorization_header_data, authorization_header_data_len, "Basic %V", &encoded_client_credentials);
@@ -658,101 +654,103 @@ static ngx_int_t set_www_authenticate_header(ngx_http_request_t *request, phanto
 
 static ngx_int_t introspection_response_handler(ngx_http_request_t *sr,
                                                 void *data, ngx_int_t rc) {
-  phantom_token_module_context_t *module_context =
-      (phantom_token_module_context_t *)data;
+    phantom_token_module_context_t *module_context =
+        (phantom_token_module_context_t *)data;
 
-  ngx_log_error(NGX_LOG_DEBUG, sr->connection->log, 0,
-                "auth request done status = %d", sr->headers_out.status);
-
-  module_context->status = sr->headers_out.status;
-
-  // fail early for not 200 response
-  if (rc != NGX_OK || sr->headers_out.status != NGX_HTTP_OK) {
-    ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
-                  "Subrequest failed with response code: %d",
+    ngx_log_error(NGX_LOG_DEBUG, sr->connection->log, 0,
+                  "Subrequest to %V return %d with status %d", &sr->uri, rc,
                   sr->headers_out.status);
-    module_context->done = 1;
 
-    return rc;
-  }
+    module_context->status = sr->headers_out.status;
 
-  ngx_int_t ret = NGX_ERROR;
+    // fail early for not 200 response
+    if (rc != NGX_OK || sr->headers_out.status != NGX_HTTP_OK) {
+        ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
+                      "Subrequest to %V failed with response code: %d",
+                      &sr->uri, sr->headers_out.status);
+        module_context->done = 1;
+
+        return rc;
+    }
+
+    ngx_int_t ret = NGX_ERROR;
 
 #if (NGX_HTTP_CACHE)
-  ret = read_introspection_response_from_cache(sr, module_context);
+    ret = read_introspection_response_from_cache(sr, module_context);
 #endif
 
-  if (ret != NGX_OK) {
-    ret = read_introspection_response(sr, module_context);
-  }
+    if (ret != NGX_OK) {
+        ret = read_introspection_response(sr, module_context);
+    }
 
-  if (ret != NGX_OK) {
-    ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
-                  "Failed to read introspection response.");
-  }
+    if (ret != NGX_OK) {
+        ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
+                      "Subrequest to %V failed to read introspection response "
+                      "(status: %d).",
+                      &sr->uri, sr->headers_out.status);
+    }
 
-  return ret;
+    return ret;
 }
 
 #if (NGX_HTTP_CACHE)
 static ngx_int_t read_introspection_response_from_cache(
     ngx_http_request_t *sr, phantom_token_module_context_t *module_context) {
-  if (sr->cache && !sr->cache->buf) {
-    // We have a cache but it's not primed
-    ngx_http_file_cache_open(sr);
-  }
-
-  u_char *jwt_start = NULL;
-  ngx_str_t cache_data = ngx_null_string;
-  ngx_int_t ret = NGX_ERROR;
-
-  if (jwt_start == NULL && sr->cache && sr->cache->buf &&
-      sr->cache->valid_sec > 0) {
-    // Try to read JWT from cache
-
-    cache_data.len = sr->cache->length;
-    cache_data.data = ngx_pnalloc(sr->pool, cache_data.len);
-    if (cache_data.data == NULL) {
-      ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
-                    "Failed to allocate memory for cache data.");
-      goto end;
+    if (sr->cache && !sr->cache->buf) {
+        // We have a cache but it's not primed
+        ngx_http_file_cache_open(sr);
     }
 
-    ngx_read_file(&sr->cache->file, cache_data.data, cache_data.len,
-                  sr->cache->body_start);
-    jwt_start = cache_data.data;
-  } else {
-    // Cache is not good.
-    goto end;
-  }
+    u_char *jwt_start = NULL;
+    ngx_str_t cache_data = ngx_null_string;
+    ngx_int_t ret = NGX_ERROR;
 
-  if (jwt_start == NULL) {
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, sr->connection->log, 0,
-                   "Failed to obtain JWT from introspection response or, if "
-                   "applicable, cache");
-    goto end;
-  }
+    if (jwt_start == NULL && sr->cache && sr->cache->buf &&
+        sr->cache->valid_sec > 0) {
+        // Try to read JWT from cache
 
-  size_t jwt_len = sr->headers_out.content_length_n;
-  size_t bearer_jwt_len = BEARER_SIZE + jwt_len;
+        cache_data.len = sr->cache->length;
+        cache_data.data = ngx_pnalloc(sr->pool, cache_data.len);
+        if (cache_data.data == NULL) {
+            ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
+                          "Failed to allocate memory for cache data.");
+            goto end;
+        }
 
-  module_context->jwt.len = bearer_jwt_len;
-  module_context->jwt.data = ngx_pnalloc(sr->pool, bearer_jwt_len);
-  if (module_context->jwt.data == NULL) {
-    ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
-                  "Failed to allocate memory for JWT token.");
-    goto end;
-  }
+        ngx_read_file(&sr->cache->file, cache_data.data, cache_data.len,
+                      sr->cache->body_start);
+        jwt_start = cache_data.data;
+    } else {
+        // Cache is not good.
+        goto end;
+    }
 
-  u_char *p = ngx_copy(module_context->jwt.data, BEARER, BEARER_SIZE);
-  ngx_memcpy(p, jwt_start, jwt_len);
-  ret = NGX_OK;
+    if (jwt_start == NULL) {
+        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, sr->connection->log, 0,
+                       "Failed to obtain JWT from introspection cache");
+        goto end;
+    }
+
+    size_t jwt_len = sr->headers_out.content_length_n;
+    size_t bearer_jwt_len = BEARER_SIZE + jwt_len;
+
+    module_context->jwt.len = bearer_jwt_len;
+    module_context->jwt.data = ngx_pnalloc(sr->pool, bearer_jwt_len);
+    if (module_context->jwt.data == NULL) {
+        ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
+                      "Failed to allocate memory for JWT token.");
+        goto end;
+    }
+
+    u_char *p = ngx_copy(module_context->jwt.data, BEARER, BEARER_SIZE);
+    ngx_memcpy(p, jwt_start, jwt_len);
+    ret = NGX_OK;
 
 end:
-  if (cache_data.data != NULL) {
-    ngx_pfree(sr->pool, cache_data.data);
-  }
-  return ret;
+    if (cache_data.data != NULL) {
+        ngx_pfree(sr->pool, cache_data.data);
+    }
+    return ret;
 }
 #endif
 
@@ -760,48 +758,48 @@ static ngx_int_t
 read_introspection_response(ngx_http_request_t *sr,
                             phantom_token_module_context_t *module_context) {
 
-  // Access the response body from the subrequest
-  ngx_chain_t *cl = sr->out;
-  size_t jwt_len = 0;
+    // Access the response body from the subrequest
+    ngx_chain_t *cl = sr->out;
+    size_t jwt_len = 0;
 
-  // Step 1: Calculate total length of the JWT in the response body
-  for (cl = sr->out; cl; cl = cl->next) {
-    ngx_buf_t *buf = cl->buf;
-    if (ngx_buf_in_memory(buf)) {
-      jwt_len += buf->last - buf->pos;
+    // Step 1: Calculate total length of the JWT in the response body
+    for (cl = sr->out; cl; cl = cl->next) {
+        ngx_buf_t *buf = cl->buf;
+        if (ngx_buf_in_memory(buf)) {
+            jwt_len += buf->last - buf->pos;
+        }
     }
-  }
 
-  ngx_log_error(NGX_LOG_DEBUG, sr->connection->log, 0,
-                "Calculated total JWT length: %zu", jwt_len);
+    ngx_log_error(NGX_LOG_DEBUG, sr->connection->log, 0,
+                  "Calculated total JWT length: %zu", jwt_len);
 
-  size_t bearer_jwt_len = BEARER_SIZE + jwt_len;
+    size_t bearer_jwt_len = BEARER_SIZE + jwt_len;
 
-  module_context->jwt.len = bearer_jwt_len;
-  module_context->jwt.data = ngx_pnalloc(sr->pool, bearer_jwt_len);
-  if (module_context->jwt.data == NULL) {
-    ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
-                  "Failed to allocate memory for JWT token.");
+    module_context->jwt.len = bearer_jwt_len;
+    module_context->jwt.data = ngx_pnalloc(sr->pool, bearer_jwt_len);
+    if (module_context->jwt.data == NULL) {
+        ngx_log_error(NGX_LOG_ERR, sr->connection->log, 0,
+                      "Failed to allocate memory for JWT token.");
+        module_context->done = 1;
+        module_context->status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+
+        return NGX_ERROR;
+    }
+
+    // Step 2: Copy the JWT into the module context
+    u_char *p = ngx_copy(module_context->jwt.data, BEARER, BEARER_SIZE);
+    for (cl = sr->out; cl; cl = cl->next) {
+        ngx_buf_t *buf = cl->buf;
+        if (ngx_buf_in_memory(buf)) {
+            size_t len = buf->last - buf->pos;
+            ngx_memcpy(p, buf->pos, len);
+            p += len;
+        }
+    }
+
     module_context->done = 1;
-    module_context->status = NGX_HTTP_INTERNAL_SERVER_ERROR;
 
-    return NGX_ERROR;
-  }
-
-  // Step 2: Copy the JWT into the module context
-  u_char *p = ngx_copy(module_context->jwt.data, BEARER, BEARER_SIZE);
-  for (cl = sr->out; cl; cl = cl->next) {
-    ngx_buf_t *buf = cl->buf;
-    if (ngx_buf_in_memory(buf)) {
-      size_t len = buf->last - buf->pos;
-      ngx_memcpy(p, buf->pos, len);
-      p += len;
-    }
-  }
-
-  module_context->done = 1;
-
-  return NGX_OK;
+    return NGX_OK;
 }
 
 static ngx_int_t post_configuration(ngx_conf_t *config)
@@ -940,7 +938,8 @@ static ngx_int_t write_error_response(ngx_http_request_t *request, ngx_int_t sta
     body = ngx_calloc_buf(request->pool);
     if (body == NULL)
     {
-        ngx_log_error(NGX_LOG_WARN, request->connection->log, 0, "Failed to allocate memory for error body");
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Failed to allocate memory for error body");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
     else
@@ -949,11 +948,20 @@ static ngx_int_t write_error_response(ngx_http_request_t *request, ngx_int_t sta
         {
             ngx_str_set(&code, "unauthorized_request");
             ngx_str_set(&message, "Access denied due to missing, invalid or expired credentials");
-        }
-        else
-        {
+        } else if (status >= 400 && status < 500) {
+            ngx_str_set(&code, "client_error");
+            ngx_str_set(&message,
+                        "Problem encountered processing the request.");
+        } else if (status == NGX_HTTP_SERVICE_UNAVAILABLE) {
+            ngx_str_set(&code, "service_unavailable");
+            ngx_str_set(&message, "Service unavailable");
+        } else {
+            ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                          "Internal server error encountered when processing "
+                          "the request");
             ngx_str_set(&code, "server_error");
-            ngx_str_set(&message, "Problem encountered processing the request");
+            ngx_str_set(&message, "Internal server error encountered when "
+                                  "processing the request");
         }
 
         /* The string length calculation replaces the two '%V' markers with their actual values */
