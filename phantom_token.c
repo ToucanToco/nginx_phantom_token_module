@@ -53,6 +53,14 @@ static char *merge_location_configuration(ngx_conf_t *main_config, void *parent,
 static ngx_int_t introspection_response_handler(ngx_http_request_t *request, void *data,
                                                 ngx_int_t introspection_subrequest_status_code);
 
+static ngx_int_t read_introspection_response_from_cache(
+    ngx_http_request_t *request,
+    phantom_token_module_context_t *module_context);
+
+static ngx_int_t
+read_introspection_response(ngx_http_request_t *request,
+                            phantom_token_module_context_t *module_context);
+
 static ngx_int_t write_error_response(ngx_http_request_t *request, ngx_int_t status, phantom_token_configuration_t *module_location_config);
 
 /**
@@ -229,7 +237,7 @@ static ngx_int_t handler(ngx_http_request_t *request)
     }
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "Handling request to convert token to JWT");
-    
+
     // return OK if the method is OPTIONS
     if (request->method == NGX_HTTP_OPTIONS) {
         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "Allow because of OPTIONS method");
@@ -619,88 +627,157 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *request, voi
 {
     phantom_token_module_context_t *module_context = (phantom_token_module_context_t*)data;
 
-    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "auth request done status = %d",
-                   request->headers_out.status);
+    ngx_log_error(NGX_LOG_DEBUG, request->connection->log, 0,
+                  "auth request done status = %d", request->headers_out.status);
 
     module_context->status = request->headers_out.status;
 
     // fail early for not 200 response
-    if (request->headers_out.status != NGX_HTTP_OK)
-    {
-        module_context->done = 1;
+    if (introspection_subrequest_status_code != NGX_OK ||
+        request->headers_out.status != NGX_HTTP_OK) {
+      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                    "Subrequest failed with response code: %d",
+                    request->headers_out.status);
+      module_context->done = 1;
 
-        return introspection_subrequest_status_code;
+      return introspection_subrequest_status_code;
     }
 
-    u_char *jwt_start = NULL;
-    ngx_str_t cache_data = ngx_null_string;
+    ngx_int_t ret =
+        read_introspection_response_from_cache(request, module_context);
 
-#if (NGX_HTTP_CACHE)
-    if (request->cache && !request->cache->buf)
-    {
-        // We have a cache but it's not primed
-        ngx_http_file_cache_open(request);
+    if (ret != NGX_OK) {
+      ret = read_introspection_response(request, module_context);
     }
 
-    if (jwt_start == NULL && request->cache && request->cache->buf && request->cache->valid_sec > 0)
-    {
-        // Try to read JWT from cache
-
-        cache_data.len = request->cache->length;
-        cache_data.data = ngx_pnalloc(request->pool, cache_data.len);
-
-        if (cache_data.data != NULL)
-        {
-            ngx_read_file(&request->cache->file, cache_data.data, cache_data.len, request->cache->body_start);
-
-            jwt_start = cache_data.data;
-        }
-    }
-    else
-    {
-        jwt_start = request->header_end + sizeof("\r\n") - 1; // FIXME: Won't work if JWT is large
+    if (ret != NGX_OK) {
+      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                    "Failed to read introspection response.");
     }
 
-    if (jwt_start == NULL)
-    {
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0,
-                       "Failed to obtain JWT from introspection response or, if applicable, cache");
+    return ret;
+}
 
-        module_context->done = 1;
-        module_context->status = NGX_HTTP_UNAUTHORIZED;
+static ngx_int_t read_introspection_response_from_cache(
+    ngx_http_request_t *request,
+    phantom_token_module_context_t *module_context) {
+  if (request->cache && !request->cache->buf) {
+    // We have a cache but it's not primed
+    ngx_http_file_cache_open(request);
+  }
 
-        return introspection_subrequest_status_code;
+  u_char *jwt_start = NULL;
+  ngx_str_t cache_data = ngx_null_string;
+
+  if (jwt_start == NULL && request->cache && request->cache->buf &&
+      request->cache->valid_sec > 0) {
+    // Try to read JWT from cache
+
+    cache_data.len = request->cache->length;
+    cache_data.data = ngx_pnalloc(request->pool, cache_data.len);
+    if (cache_data.data == NULL) {
+      ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                    "Failed to allocate memory for cache data.");
+      module_context->done = 1;
+      module_context->status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+
+      return NGX_ERROR;
     }
-#else
-    jwt_start = request->header_end + sizeof("\r\n") - 1; // FIXME: Won't work if JWT is large
-#endif
 
-    size_t jwt_len = request->headers_out.content_length_n;
-    size_t bearer_jwt_len = BEARER_SIZE + jwt_len;
+    ngx_read_file(&request->cache->file, cache_data.data, cache_data.len,
+                  request->cache->body_start);
+    jwt_start = cache_data.data;
+  } else {
+    // Cache is not good.
+    module_context->done = 1;
+    module_context->status = NGX_HTTP_UNAUTHORIZED;
 
-    module_context->jwt.len = bearer_jwt_len;
-    module_context->jwt.data = ngx_pnalloc(request->pool, bearer_jwt_len);
+    return NGX_ERROR;
+  }
 
-    if (module_context->jwt.data == NULL)
-    {
-        module_context->done = 1;
-        module_context->status = NGX_HTTP_UNAUTHORIZED;
-
-        return introspection_subrequest_status_code;
-    }
-
-    u_char *p = ngx_copy(module_context->jwt.data, BEARER, BEARER_SIZE);
-
-    ngx_memcpy(p, jwt_start, jwt_len);
-
-    if (cache_data.len > 0)
-    {
-        ngx_pfree(request->pool, cache_data.data);
-    }
+  if (jwt_start == NULL) {
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0,
+                   "Failed to obtain JWT from introspection response or, if "
+                   "applicable, cache");
 
     module_context->done = 1;
+    module_context->status = NGX_HTTP_UNAUTHORIZED;
 
-    return introspection_subrequest_status_code;
+    goto end;
+  }
+
+  size_t jwt_len = request->headers_out.content_length_n;
+  size_t bearer_jwt_len = BEARER_SIZE + jwt_len;
+
+  module_context->jwt.len = bearer_jwt_len;
+  module_context->jwt.data = ngx_pnalloc(request->pool, bearer_jwt_len);
+  if (module_context->jwt.data == NULL) {
+    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                  "Failed to allocate memory for JWT token.");
+    module_context->done = 1;
+    module_context->status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+
+    goto end;
+  }
+
+  u_char *p = ngx_copy(module_context->jwt.data, BEARER, BEARER_SIZE);
+  ngx_memcpy(p, jwt_start, jwt_len);
+
+end:
+  if (cache_data.data != NULL) {
+    ngx_pfree(request->pool, cache_data.data);
+  }
+  module_context->done = 1;
+
+  return NGX_OK;
+}
+
+static ngx_int_t
+read_introspection_response(ngx_http_request_t *request,
+                            phantom_token_module_context_t *module_context) {
+
+  // Access the response body from the subrequest
+  ngx_chain_t *cl = request->out;
+  size_t jwt_len = 0;
+
+  // Step 1: Calculate total length of the JWT in the response body
+  for (cl = request->out; cl; cl = cl->next) {
+    ngx_buf_t *buf = cl->buf;
+    if (ngx_buf_in_memory(buf)) {
+      jwt_len += buf->last - buf->pos;
+    }
+  }
+
+  ngx_log_error(NGX_LOG_DEBUG, request->connection->log, 0,
+                "Calculated total JWT length: %zu", jwt_len);
+
+  size_t bearer_jwt_len = BEARER_SIZE + jwt_len;
+
+  module_context->jwt.len = bearer_jwt_len;
+  module_context->jwt.data = ngx_pnalloc(request->pool, bearer_jwt_len);
+  if (module_context->jwt.data == NULL) {
+    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                  "Failed to allocate memory for JWT token.");
+    module_context->done = 1;
+    module_context->status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+
+    return NGX_ERROR;
+  }
+
+  // Step 2: Copy the JWT into the module context
+  u_char *p = ngx_copy(module_context->jwt.data, BEARER, BEARER_SIZE);
+  for (cl = request->out; cl; cl = cl->next) {
+    ngx_buf_t *buf = cl->buf;
+    if (ngx_buf_in_memory(buf)) {
+      size_t len = buf->last - buf->pos;
+      ngx_memcpy(p, buf->pos, len);
+      p += len;
+    }
+  }
+
+  module_context->done = 1;
+
+  return NGX_OK;
 }
 
 static ngx_int_t post_configuration(ngx_conf_t *config)
@@ -869,7 +946,7 @@ static ngx_int_t write_error_response(ngx_http_request_t *request, ngx_int_t sta
         if (rc == NGX_ERROR || rc > NGX_OK || request->header_only) {
             return rc;
         }
-        
+
         body->pos = json_error_data;
         body->last = json_error_data + error_len;
         body->memory = 1;
