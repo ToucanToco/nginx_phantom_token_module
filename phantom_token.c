@@ -656,6 +656,7 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *sr,
                                                 void *data, ngx_int_t rc) {
     phantom_token_module_context_t *module_context =
         (phantom_token_module_context_t *)data;
+    ngx_int_t ret = NGX_ERROR;
 
     ngx_log_error(NGX_LOG_DEBUG, sr->connection->log, 0,
                   "Subrequest to %V return %d with status %d", &sr->uri, rc,
@@ -670,10 +671,8 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *sr,
                       &sr->uri, sr->headers_out.status);
         module_context->done = 1;
 
-        return rc;
+        return ret;
     }
-
-    ngx_int_t ret = NGX_ERROR;
 
 #if (NGX_HTTP_CACHE)
     ret = read_introspection_response_from_cache(sr, module_context);
