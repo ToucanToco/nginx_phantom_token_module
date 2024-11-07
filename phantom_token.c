@@ -14,12 +14,12 @@
  *  limitations under the License.
  */
 
-#include <assert.h>
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
 #include <ngx_string.h>
 #include <stdbool.h>
+#include <assert.h>
 
 #define UNENCODED_CLIENT_CREDENTIALS_BUF_LEN 255
 
