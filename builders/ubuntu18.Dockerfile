@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:18.04
 
 RUN apt-get update && \
     apt-get install -y build-essential libpcre3-dev libpcre2-dev zlib1g-dev
