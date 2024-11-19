@@ -234,7 +234,7 @@ static ngx_int_t handler(ngx_http_request_t *request)
     if (request->method == NGX_HTTP_OPTIONS)
     {
         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "Not processing OPTIONS request");
-        return NGX_HTTP_NO_CONTENT;
+        return NGX_OK;
     }
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "Handling request to convert token to JWT");
