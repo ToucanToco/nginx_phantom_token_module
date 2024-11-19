@@ -676,7 +676,7 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *sr,
                       &sr->uri, sr->headers_out.status);
         module_context->done = 1;
 
-        return ret;
+        return rc;
     }
 
 #if (NGX_HTTP_CACHE)
@@ -696,7 +696,7 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *sr,
 
     module_context->done = 1;
 
-    return ret;
+    return rc;
 }
 
 #if (NGX_HTTP_CACHE)
