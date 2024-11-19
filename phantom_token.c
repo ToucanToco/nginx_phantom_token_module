@@ -621,7 +621,9 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *request, voi
         // With default configuration, the total buffer memory size is 4KB and the response header size might be 332 bytes.
         // The ngx_buf_size macro returns the body size only: the size of the JWT or a partial size of the JWT, like 3764 bytes.
         // If the JWT content length is greater than the body buffer size, we must avoid reading past the end of the buffer.
-        body_buffer_size = ngx_buf_size(&request->upstream->buffer);
+        body_buffer_size = ngx_buf_size((
+            &request->upstream->buffer)); // Double parenthesis because of macro
+                                          // expansion issue for nginx 1.18.0.
         if (jwt_len > body_buffer_size)
         {
             // The standard solution to truncated responses, commonly used for long headers, is to configure an increased proxy_buffer_size.
