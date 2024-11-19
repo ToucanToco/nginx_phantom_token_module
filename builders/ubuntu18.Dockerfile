@@ -1,7 +1,7 @@
-FROM amazonlinux:2023
+FROM ubuntu:18.04
 
-RUN yum install -y \
- gcc pcre2-devel zlib-devel make
+RUN apt-get update && \
+    apt-get install -y build-essential libpcre3-dev libpcre2-dev zlib1g-dev
 
 COPY configure /tmp
 COPY config /tmp
