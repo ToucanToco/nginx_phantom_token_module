@@ -1,0 +1,6 @@
+-I./nginx-1.25.5/src/core
+-I./nginx-1.25.5/objs
+-I./nginx-1.25.5/src/os/unix
+-I./nginx-1.25.5/src/http
+-I./nginx-1.25.5/src/http/modules
+-I./nginx-1.25.5/src/event
