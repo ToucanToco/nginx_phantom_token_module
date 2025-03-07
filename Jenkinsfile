@@ -27,7 +27,7 @@ pipeline {
         sh """
           cd testing/integration
           echo \"\$LICENSE_CONTENT\" > license.json
-          LICENSE_FILE_PATH=license.json ./deploy.sh"
+          LICENSE_FILE_PATH=license.json ./deploy.sh
         """
       }
     }
