@@ -24,7 +24,7 @@ pipeline {
     stage('Test') {
       steps {
         storeStage()
-        sh 'cd testing/integration && echo "$LICENSE_CONTENT" > license.json && LICENSE_FILE_PATH=license.json ./deploy.sh'
+        sh 'cd testing/integration && echo "$$LICENSE_CONTENT" > license.json && LICENSE_FILE_PATH=license.json ./deploy.sh'
       }
     }
 
