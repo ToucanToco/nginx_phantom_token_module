@@ -9,7 +9,7 @@ services:
   nginx-service:
     image: nginx_${LINUX_DISTRO}:${NGINX_VERSION}
     ports:
-    - 8080:8080
+    - 38080:8080
     volumes:
     - ./nginx.conf:${CONF_PATH}
     - ../../build/${MODULE_FILE}:${MODULE_FOLDER}/ngx_curity_http_phantom_token_module.so
