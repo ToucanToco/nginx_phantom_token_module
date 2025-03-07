@@ -4,8 +4,8 @@
 # Builds an entire release with all supported NGINX versions and Linux OS versions
 ##################################################################################
 
-NGINX_VERSIONS=('1.18.0' '1.25.5')
-LINUX_DISTROS=('ubuntu18' 'ubuntu22' 'alpine3.21')
+NGINX_VERSIONS=('1.18.0' '1.25.5' '1.27.4')
+LINUX_DISTROS=('ubuntu18' 'ubuntu22' 'alpine3.21' 'debian12')
 rm log.txt 2>/dev/null
 
 #
