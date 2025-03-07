@@ -1,7 +1,8 @@
-FROM ubuntu:24.04 AS builder
+FROM alpine:3.21 AS builder
 
-RUN apt-get update && \
-    apt-get install -y build-essential libpcre3-dev libpcre2-dev zlib1g-dev
+RUN apk add --no-cache --virtual .build-deps \
+    gcc libc-dev make pcre2-dev pcre-dev zlib-dev linux-headers libxslt-dev \
+    gd-dev geoip-dev perl-dev libedit-dev mercurial alpine-sdk findutils bash
 
 COPY configure /tmp
 COPY config /tmp

@@ -60,3 +60,5 @@ testing/test/t/servroot
 response.txt
 valgrind-results.txt
 log.txt
+# JSON is probably a license file
+*.json

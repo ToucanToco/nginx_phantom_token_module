@@ -97,26 +97,60 @@ static ngx_int_t set_www_authenticate_header(ngx_http_request_t *request, phanto
  */
 static char* set_client_credential_configuration_slot(ngx_conf_t *config_setting, ngx_command_t *command, void *result);
 
+/**
+ * Sets the base-64-encoded client ID and secret in the module's configuration
+ * setting structure from a file.
+ *
+ * This method assumes the module's command where this setter function
+ * (<code>set</code>) is used has a configuration (<code>conf</code>) of
+ * <code>NGX_HTTP_LOC_CONF_OFFSET<code> and an <code>offset</code> of
+ * <code>base64encoded_client_credential</code>. If this is not the case, the
+ * result pointer <em>may</em> point to an unexpected location and the handler
+ * may not be able to use the configured values. Also, the command should have a
+ * type that includes <code>NGX_CONF_TAKE2</code>.
+ *
+ * @param config_setting the configuration setting that is being set
+ * @param command the module's command where this slot setter function is being
+ * used
+ * @param result a pointer to the location where the result will be stored; it
+ * should be a pointer to a <code>ngx_str_t</code>.
+ *
+ * @return <code>NGX_CONF_OK</code> upon success; some other character string on
+ * failure.
+ */
+static char *set_client_credential_file_configuration_slot(
+    ngx_conf_t *config_setting, ngx_command_t *command, void *result);
+
 static const char BEARER[] = "Bearer ";
 static const size_t BEARER_SIZE = sizeof(BEARER) - 1;
 
-static ngx_command_t phantom_token_module_directives[] =
-{
+static ngx_command_t phantom_token_module_directives[] = {
     {
-          ngx_string("phantom_token"),
-          NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF | NGX_CONF_FLAG,
-          ngx_conf_set_flag_slot,
-          NGX_HTTP_LOC_CONF_OFFSET,
-          offsetof(phantom_token_configuration_t, enable),
-          NULL
+        ngx_string("phantom_token"),
+        NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
+            NGX_CONF_FLAG,
+        ngx_conf_set_flag_slot,
+        NGX_HTTP_LOC_CONF_OFFSET,
+        offsetof(phantom_token_configuration_t, enable),
+        NULL,
     },
     {
         ngx_string("phantom_token_client_credential"),
         NGX_HTTP_LOC_CONF | NGX_CONF_TAKE2,
         set_client_credential_configuration_slot,
         NGX_HTTP_LOC_CONF_OFFSET,
-        offsetof(phantom_token_configuration_t, base64encoded_client_credential),
-        NULL
+        offsetof(phantom_token_configuration_t,
+                 base64encoded_client_credential),
+        NULL,
+    },
+    {
+        ngx_string("phantom_token_client_credential_file"),
+        NGX_HTTP_LOC_CONF | NGX_CONF_TAKE2,
+        set_client_credential_file_configuration_slot,
+        NGX_HTTP_LOC_CONF_OFFSET,
+        offsetof(phantom_token_configuration_t,
+                 base64encoded_client_credential),
+        NULL,
     },
     {
         ngx_string("phantom_token_introspection_endpoint"),
@@ -124,7 +158,7 @@ static ngx_command_t phantom_token_module_directives[] =
         ngx_conf_set_str_slot,
         NGX_HTTP_LOC_CONF_OFFSET,
         offsetof(phantom_token_configuration_t, introspection_endpoint),
-        NULL
+        NULL,
     },
     {
         ngx_string("phantom_token_realm"),
@@ -132,7 +166,7 @@ static ngx_command_t phantom_token_module_directives[] =
         ngx_conf_set_str_slot,
         NGX_HTTP_LOC_CONF_OFFSET,
         offsetof(phantom_token_configuration_t, realm),
-        NULL
+        NULL,
     },
     {
         ngx_string("phantom_token_scopes"),
@@ -140,7 +174,7 @@ static ngx_command_t phantom_token_module_directives[] =
         ngx_conf_set_str_slot,
         NGX_HTTP_LOC_CONF_OFFSET,
         offsetof(phantom_token_configuration_t, space_separated_scopes),
-        NULL
+        NULL,
     },
     {
         ngx_string("phantom_token_scope"),
@@ -148,7 +182,7 @@ static ngx_command_t phantom_token_module_directives[] =
         ngx_conf_set_str_array_slot,
         NGX_HTTP_LOC_CONF_OFFSET,
         offsetof(phantom_token_configuration_t, scopes),
-        NULL
+        NULL,
     },
     ngx_null_command /* command termination */
 };
@@ -793,6 +827,95 @@ static char* set_client_credential_configuration_slot(ngx_conf_t *config_setting
     return "invalid_client_credential";
 }
 
+static char *set_client_credential_file_configuration_slot(
+    ngx_conf_t *config_setting, ngx_command_t *command, void *result) {
+    ngx_str_t *base64encoded_client_credential = result;
+    ngx_str_t *args = config_setting->args->elts;
+    ngx_str_t client_id = args[1], client_secret_file = args[2];
+
+    u_char *path = client_secret_file.data;
+    ngx_file_t file;
+    ngx_file_info_t fi;
+
+    if (client_id.len == 0) {
+        return "invalid_client_credential";
+    }
+
+    file.fd = ngx_open_file(path, NGX_FILE_RDONLY, NGX_FILE_OPEN, 0);
+    if (file.fd == NGX_INVALID_FILE) {
+        ngx_conf_log_error(NGX_LOG_ERR, config_setting, ngx_errno,
+                           "unable to open file %s: %s", path);
+        return NGX_CONF_ERROR;
+    }
+
+    if (ngx_fd_info(file.fd, &fi)) {
+        ngx_conf_log_error(NGX_LOG_ERR, config_setting, ngx_errno,
+                           "unable to stat file %s", path);
+        goto failed;
+    }
+
+    size_t size = ngx_file_size(&fi);
+    if (size == 0) {
+        ngx_conf_log_error(NGX_LOG_ERR, config_setting, 0, "file %s is empty",
+                           path);
+        goto failed;
+    }
+
+    u_char *buf = ngx_pnalloc(config_setting->pool, size);
+    if (buf == NULL) {
+        ngx_conf_log_error(NGX_LOG_EMERG, config_setting, 0,
+                           "could not allocate buf");
+        goto failed;
+    }
+
+    ssize_t n = ngx_read_file(&file, buf, size, 0);
+    if (n == NGX_ERROR) {
+        ngx_conf_log_error(NGX_LOG_CRIT, config_setting, ngx_errno,
+                           "file %s read error", path);
+        goto failed;
+    }
+    if ((size_t)n != size) {
+        ngx_conf_log_error(NGX_LOG_CRIT, config_setting, 0,
+                           "file %s returned only %z bytes instead of %uz",
+                           path, n, size);
+        goto failed;
+    }
+
+    // Trim newline
+    if (n > 0 && buf[n - 1] == '\n') {
+        buf[--n] = '\0';
+    }
+    ngx_str_t client_secret = {n, buf};
+
+    u_char
+        unencoded_client_credentials_data[UNENCODED_CLIENT_CREDENTIALS_BUF_LEN];
+    u_char *p = ngx_snprintf(unencoded_client_credentials_data,
+                             sizeof(unencoded_client_credentials_data), "%V:%V",
+                             &client_id, &client_secret);
+    ngx_str_t unencoded_client_credentials = {
+        p - unencoded_client_credentials_data,
+        unencoded_client_credentials_data};
+
+    base64encoded_client_credential->data =
+        ngx_palloc(config_setting->pool,
+                   ngx_base64_encoded_length(unencoded_client_credentials.len));
+
+    if (base64encoded_client_credential->data == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    ngx_encode_base64(base64encoded_client_credential,
+                      &unencoded_client_credentials);
+
+    return NGX_CONF_OK;
+
+failed:
+    if (ngx_close_file(file.fd) == NGX_FILE_ERROR) {
+        ngx_conf_log_error(NGX_LOG_ALERT, config_setting, ngx_errno,
+                           "unable to close file %s", path);
+    }
+    return "invalid_client_credential";
+}
 
 static ngx_int_t set_www_authenticate_header(ngx_http_request_t *request, phantom_token_configuration_t *module_location_config, char *error_code)
 {

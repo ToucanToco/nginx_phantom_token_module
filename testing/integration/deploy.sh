@@ -30,7 +30,7 @@ if [ "$ADMIN_PASSWORD" == '' ]; then
   ADMIN_PASSWORD=Password1
 fi
 if [ "$LINUX_DISTRO" == '' ]; then
-  LINUX_DISTRO='alpine'
+  LINUX_DISTRO='alpine3.21'
 fi
 if [ "$NGINX_VERSION" == '' ]; then
   NGINX_VERSION='1.25.5'
@@ -44,6 +44,13 @@ case $LINUX_DISTRO in
 
   'alpine')
     MODULE_FILE="alpine.ngx_curity_http_phantom_token_module_$NGINX_VERSION.so"
+    MODULE_FOLDER='/usr/lib/nginx/modules'
+    NGINX_PATH='/usr/sbin/nginx'
+    CONF_PATH='/etc/nginx/nginx.conf'
+    ;;
+
+  'alpine3.21')
+    MODULE_FILE="alpine3.21.ngx_curity_http_phantom_token_module_$NGINX_VERSION.so"
     MODULE_FOLDER='/usr/lib/nginx/modules'
     NGINX_PATH='/usr/sbin/nginx'
     CONF_PATH='/etc/nginx/nginx.conf'
@@ -126,7 +133,7 @@ fi
 # Build the valgrind image
 #
 echo 'Building the NGINX and valgrind Docker image ...'
-docker build --no-cache -f "$LINUX_DISTRO/Dockerfile" --build-arg NGINX_VERSION="$NGINX_VERSION" -t "nginx_$LINUX_DISTRO:$NGINX_VERSION" .
+docker build -f "$LINUX_DISTRO/Dockerfile" --build-arg NGINX_VERSION="$NGINX_VERSION" -t "nginx_$LINUX_DISTRO:$NGINX_VERSION" .
 if [ $? -ne 0 ]; then
   >&2 echo "Problem encountered building the NGINX $LINUX_DISTRO docker image"
   exit 1
@@ -149,6 +156,12 @@ if [ $? -ne 0 ]; then
   >&2 echo 'Problem encountered running the Docker Compose deployment'
   exit 1
 fi
+
+cleanup() {
+  docker-compose down
+}
+
+trap cleanup EXIT INT TERM
 
 #
 # Wait for the Identity Server to come up
@@ -173,12 +186,13 @@ RESPONSE_FILE=response.txt
 #
 echo
 echo 'Running API tests ...'
+ret=0
 for TOKEN in $(seq 1 20)
 do
   #
   # Act as a client to get a token
   #
-  echo "Getting token $TOKEN" 
+  echo "Getting token $TOKEN"
   HTTP_STATUS=$(curl -s -X POST http://localhost:8443/oauth/v2/oauth-token \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "client_id=$CLIENT_ID" \
@@ -188,6 +202,7 @@ do
     -o $RESPONSE_FILE -w '%{http_code}')
   if [ "$HTTP_STATUS" != '200' ]; then
     echo "Unexpected status authenticating: $HTTP_STATUS"
+    ret=1
   fi
   JSON=$(cat $RESPONSE_FILE)
   ACCESS_TOKEN=$(jq -r .access_token <<< "$JSON")
@@ -201,13 +216,15 @@ do
     HTTP_STATUS=$(curl -s -X GET 'http://localhost:8080/api' -H "Authorization: Bearer $ACCESS_TOKEN" -o $RESPONSE_FILE -w '%{http_code}')
     if [ "$HTTP_STATUS" != '200' ]; then
       >&2 echo "Unexpected status during API call: $HTTP_STATUS"
+      ret=1
     fi
   done
 
-  echo "Calling API 3" 
+  echo "Calling API 3"
   HTTP_STATUS=$(curl -s -X GET 'http://localhost:8080/api' -H "Authorization: Bearer xxx" -o $RESPONSE_FILE -w '%{http_code}')
   if [ "$HTTP_STATUS" != '401' ]; then
     >&2 echo "Unexpected status during API call: $HTTP_STATUS"
+    ret=1
   fi
 
   for CALL in $(seq 4 5)
@@ -216,6 +233,37 @@ do
     HTTP_STATUS=$(curl -s -X GET 'http://localhost:8080/api' -H "Authorization: Bearer $ACCESS_TOKEN" -o $RESPONSE_FILE -w '%{http_code}')
     if [ "$HTTP_STATUS" != '200' ]; then
       >&2 echo "Unexpected status during API call: $HTTP_STATUS"
+      ret=1
+    fi
+  done
+
+  #
+  # Make valid and invalid API calls
+  #
+  for CALL in $(seq 1 2)
+  do
+    echo "Calling API File-based $CALL"
+    HTTP_STATUS=$(curl -s -X GET 'http://localhost:8080/api-file' -H "Authorization: Bearer $ACCESS_TOKEN" -o $RESPONSE_FILE -w '%{http_code}')
+    if [ "$HTTP_STATUS" != '200' ]; then
+      >&2 echo "Unexpected status during API call: $HTTP_STATUS"
+      ret=1
+    fi
+  done
+
+  echo "Calling API File-based 3"
+  HTTP_STATUS=$(curl -s -X GET 'http://localhost:8080/api-file' -H "Authorization: Bearer xxx" -o $RESPONSE_FILE -w '%{http_code}')
+  if [ "$HTTP_STATUS" != '401' ]; then
+    >&2 echo "Unexpected status during API call: $HTTP_STATUS"
+    ret=1
+  fi
+
+  for CALL in $(seq 4 5)
+  do
+    echo "Calling API File-based $CALL"
+    HTTP_STATUS=$(curl -s -X GET 'http://localhost:8080/api-file' -H "Authorization: Bearer $ACCESS_TOKEN" -o $RESPONSE_FILE -w '%{http_code}')
+    if [ "$HTTP_STATUS" != '200' ]; then
+      >&2 echo "Unexpected status during API call: $HTTP_STATUS"
+      ret=1
     fi
   done
 done
@@ -229,6 +277,4 @@ DOCKER_CONTAINER_ID=$(docker container ls | grep "nginx_$LINUX_DISTRO" | awk '{p
 docker cp "$DOCKER_CONTAINER_ID:/valgrind-results.txt" .
 cat valgrind-results.txt
 
-#
-# Free resources
-docker compose down
+exit $ret

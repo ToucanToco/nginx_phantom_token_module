@@ -8,7 +8,22 @@ NGINX_VERSION=${NGINX_VERSION:-1.25.5}
 NGINX_TARBALL=nginx-${NGINX_VERSION}.tar.gz
 LINUX_DISTRO=${LINUX_DISTRO:-alpine}
 
+TAG_NAME=$(git describe --tags --abbrev=0 --exact-match 2>/dev/null)
+TAG_NAME_DEV=$(git describe --tags --abbrev=0 2>/dev/null)
+VERSION_CORE="$(echo $TAG_NAME | sed 's/+/-/')"
+VERSION_CORE_DEV="$(echo $TAG_NAME_DEV | sed 's/+/-/')"
+GIT_COMMIT="$(git rev-parse --short=7 HEAD)"
+
+if [ -n "$TAG_NAME" ] && [ -n "$VERSION_CORE" ]; then
+  VERSION="$VERSION_CORE"
+elif [ -n "$TAG_NAME_DEV" ] && [ -n "$VERSION_CORE_DEV" ]; then
+  VERSION="$VERSION_CORE_DEV-dev"
+else
+  VERSION="$GIT_COMMIT"
+fi
+
 if [ "$LINUX_DISTRO" != 'alpine' ] &&
+   [ "$LINUX_DISTRO" != 'alpine3.21' ] &&
    [ "$LINUX_DISTRO" != 'debian11' ] &&
    [ "$LINUX_DISTRO" != 'debian12' ] &&
    [ "$LINUX_DISTRO" != 'ubuntu18' ] &&
@@ -25,6 +40,8 @@ fi
 function getLibraryPrefix() {
   if [ "$LINUX_DISTRO" == 'alpine' ]; then
     echo 'alpine'
+  elif [ "$LINUX_DISTRO" == 'alpine3.21' ]; then
+    echo 'alpine3.21'
   elif [ "$LINUX_DISTRO" == 'debian11' ]; then
     echo 'debian.bullseye'
   elif [ "$LINUX_DISTRO" == 'debian12' ]; then
@@ -60,17 +77,27 @@ if [[ ! -r $NGINX_TARBALL ]]; then
   $DOWNLOAD_PROGRAM https://nginx.org/download/nginx-"${NGINX_VERSION}".tar.gz
 fi
 
-docker build -t nginx-module-builder \
+docker build -t "nginx-module-builder:$LINUX_DISTRO" \
   --build-arg NGINX_VERSION="$NGINX_VERSION" \
   -f builders/$LINUX_DISTRO.Dockerfile .
 if [ $? -ne 0 ]; then
   echo "Docker build problem encountered for OS $LINUX_DISTRO and NGINX $NGINX_VERSION"
   exit 1
 fi
+docker tag nginx-module-builder:$LINUX_DISTRO quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO-ngx$NGINX_VERSION
+docker tag nginx-module-builder:$LINUX_DISTRO quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO
+docker tag nginx-module-builder:$LINUX_DISTRO quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO
+docker tag nginx-module-builder:$LINUX_DISTRO quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO-ngx$NGINX_VERSION
 
 mkdir -p build
 LIBRARY_PREFIX=$(getLibraryPrefix)
-docker run --name nginx-modules nginx-module-builder
-docker cp nginx-modules:/tmp/nginx-$NGINX_VERSION/objs/ngx_curity_http_phantom_token_module.so ./build/$LIBRARY_PREFIX.ngx_curity_http_phantom_token_module_$NGINX_VERSION.so
-docker rm nginx-modules
-docker rmi nginx-module-builder
+docker run --name nginx-modules "nginx-module-builder:$LINUX_DISTRO"
+docker cp nginx-modules:/ngx_curity_http_phantom_token_module.so ./build/$LIBRARY_PREFIX.ngx_curity_http_phantom_token_module_$NGINX_VERSION.so
+docker rm -f nginx-modules
+
+if [ -n "$PUSH" ]; then
+  docker push quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO-ngx$NGINX_VERSION
+  docker push quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO
+  docker push quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO-ngx$NGINX_VERSION
+  docker push quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO
+fi

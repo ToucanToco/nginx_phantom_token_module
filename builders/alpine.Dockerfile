@@ -1,4 +1,4 @@
-FROM alpine:3
+FROM alpine:3 AS builder
 
 RUN apk add --no-cache --virtual .build-deps \
     gcc libc-dev make pcre2-dev zlib-dev linux-headers libxslt-dev \
@@ -14,3 +14,11 @@ ADD nginx-$NGINX_VERSION.tar.gz /tmp/
 
 WORKDIR /tmp
 RUN ./configure && make -j $(nproc)
+
+FROM busybox
+
+ARG NGINX_VERSION
+COPY --from=builder /tmp/nginx-$NGINX_VERSION/objs/ngx_curity_http_phantom_token_module.so /
+
+COPY ./builders/init_module.sh /usr/local/bin/init_module.sh
+ENTRYPOINT [ "/usr/local/bin/init_module.sh" ]

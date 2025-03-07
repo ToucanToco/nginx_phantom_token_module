@@ -1,5 +1,5 @@
 services:
-  
+
   # The target API which the reverse proxy routes to, inside the cluster
   httpbin-service:
     image: kennethreitz/httpbin
@@ -13,6 +13,7 @@ services:
     volumes:
     - ./nginx.conf:${CONF_PATH}
     - ../../build/${MODULE_FILE}:${MODULE_FOLDER}/ngx_curity_http_phantom_token_module.so
+    - ./credentials.txt:/secrets/credentials.txt
     command: >
       sh -c "/usr/bin/valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --verbose --log-file=/valgrind-results.txt /usr/sbin/nginx"
 

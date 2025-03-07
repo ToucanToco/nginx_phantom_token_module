@@ -1,5 +1,9 @@
 # Phantom Token NGINX Module
 
+> [!NOTE]
+>
+> For Toucan employees, there are instructions to run the CI just below.
+
 [![Quality](https://img.shields.io/badge/quality-production-green)](https://curity.io/resources/code-examples/status/)
 [![Availability](https://img.shields.io/badge/availability-binary-blue)](https://curity.io/resources/code-examples/status/)
 
@@ -9,13 +13,25 @@ This module, when enabled, filters incoming requests, denying access to those wh
 
 ![NGINX / Curity integration](nginx_curity_integration.png?v=2 "Overview of how NGINX and Curity are integrated")
 
-The initial calls by the app (web or native) are done using [OpenID Connect](http://openid.net/specs/openid-connect-core-1_0.html) (OIDC). The important part is that the token that is issued is an opaque access token. It is a GUID or UUID or a few handfuls of random bytes; there is no identity-related data in this token. It is a _phantom_ of the actual user data, hence the name -- _phantom token_. The app presents the token to the NGINX gateway according to the _Bearer Token Usage_ specficiation (i.e., [RFC 6750](https://tools.ietf.org/html/rfc6750)). This standard says that the app should send the phantom token in the `Authorization` request header. 
+The initial calls by the app (web or native) are done using [OpenID Connect](http://openid.net/specs/openid-connect-core-1_0.html) (OIDC). The important part is that the token that is issued is an opaque access token. It is a GUID or UUID or a few handfuls of random bytes; there is no identity-related data in this token. It is a _phantom_ of the actual user data, hence the name -- _phantom token_. The app presents the token to the NGINX gateway according to the _Bearer Token Usage_ specficiation (i.e., [RFC 6750](https://tools.ietf.org/html/rfc6750)). This standard says that the app should send the phantom token in the `Authorization` request header.
 
-Once the NGINX server receives the access token, this module will kick in. Using configuration like that below, this module will interrogate the request, find the token, and make a sideways call to the Curity Identity Server. This web service request will be done using the _Token Introspection_ standard ([RFC 7662](https://tools.ietf.org/html/rfc7662)) with an `Accept` type of `application/jwt` (as defined in [RFC 7519](https://tools.ietf.org/html/rfc7519#section-10.3.1)). This will cause the Curity Identity Server to return not JSON but just a JWT. Then, the module will forward the JWT token to the back-end APIs and microservices. 
+Once the NGINX server receives the access token, this module will kick in. Using configuration like that below, this module will interrogate the request, find the token, and make a sideways call to the Curity Identity Server. This web service request will be done using the _Token Introspection_ standard ([RFC 7662](https://tools.ietf.org/html/rfc7662)) with an `Accept` type of `application/jwt` (as defined in [RFC 7519](https://tools.ietf.org/html/rfc7519#section-10.3.1)). This will cause the Curity Identity Server to return not JSON but just a JWT. Then, the module will forward the JWT token to the back-end APIs and microservices.
 
 If the module is also configured to cache the results of the call to the Curity Identity Server (which it should be for production cases), the phantom token will be used as a cache key for the corresponding JWT token. This will eliminate the need for subsequent calls to the Curity Identity Server for as long as it tells the NGINX module it may cache the JWT for.
 
 The tl;dr is a very simple API gateway that is blazing fast, highly scalable, and without any bells and whistles to get in the way. All the code is here, so it's easy to change and use with other OAuth servers even!
+
+## For Toucan
+
+### Releasing
+
+Tag & push your commit:
+
+```shell
+git tag -s -m "v1.0.0" v1.0.0
+git push origin v1.0.0
+```
+
 
 ## Configuration Directives
 
@@ -33,13 +49,23 @@ All the directives in this subsection are required; if any of these are omitted,
 
 #### phantom_token_client_credential
 
-> **Syntax**: **`phantom_token_client_credential`** _`string`_ _`string`_ 
-> 
-> **Default**: *`—`*                                                                
-> 
-> **Context**: `location`                                                           
- 
+> **Syntax**: **`phantom_token_client_credential`** _`string`_ _`string`_
+>
+> **Default**: *`—`*
+>
+> **Context**: `location`
+
 The client ID and secret of the OAuth client which will be used for introspection. The first argument to this directive is the client ID and the second is the secret. The maximum total length of the two arguments must be less than 255 characters. Both should be printable ASCII values; non-ASCII values _may_ work but are untested. If this directive is not configured, then the module will be disabled.
+
+#### phantom_token_client_credential_file
+
+> **Syntax**: **`phantom_token_client_credential_file`** _`string`_ _`string`_
+>
+> **Default**: *`—`*
+>
+> **Context**: `location`
+
+The client ID and secret file of the OAuth client which will be used for introspection. The first argument to this directive is the client ID and the second is the secret file containing the secret string (trailing `\n` are trimmed). The maximum total length of the client ID and client secret must be less than 255 characters. Both should be printable ASCII values; non-ASCII values _may_ work but are untested. If this directive is not configured, then the module will be disabled.
 
 #### phantom_token_introspection_endpoint
 
@@ -59,7 +85,7 @@ server {
         ...
         phantom_token_introspection_endpoint my_good_location_name_for_curity;
     }
-    
+
     location my_good_location_name_for_curity {
         ...
     }
@@ -73,9 +99,9 @@ The following directives are optional and do not need to be configured.
 #### phantom_token_realm
 
 > **Syntax**: **`phantom_token_realm`** _`string`_
-> 
+>
 > **Default**: *`api`*
-> 
+>
 > **Context**: `location`
 
 The name of the protected realm or scope of protection that should be used when a client does not provide an access token.
@@ -86,7 +112,7 @@ Example configuration:
 location / {
    ...
    phantom_token_realm "myGoodRealm";
-}   
+}
 ```
 
 #### phantom_token_scopes
@@ -117,9 +143,9 @@ location / {
 > **Context**: `location`
 
 An array of scopes that the server should inform the client are required when it does not provide an access token. If `phantom_token_scopes` is also configured, that value will supersede these.
- 
+
 Example configuration:
- 
+
 ```nginx
 location / {
    ...
@@ -154,7 +180,7 @@ server {
         phantom_token_client_credential "client_id" "client_secret";
         phantom_token_introspection_endpoint curity;
     }
-    
+
     location curity {
         proxy_pass "https://curity.example.com/oauth/v2/introspection";
     }
@@ -174,11 +200,11 @@ server {
         phantom_token on;
         phantom_token_client_credential "client_id" "client_secret";
         phantom_token_introspection_endpoint curity;
-        
+
         phantom_token_realm "myGoodAPI";
         phantom_token_scopes "scope_a scope_b scope_c";
     }
-    
+
     location curity {
         proxy_pass "https://server2.example.com:8443/oauth/v2/introspection";
     }
@@ -192,7 +218,7 @@ server {
     }
 }
 ```
-        
+
 ### More Advanced Configuration with Separate Servers and Caching
 
 This module takes advantage of NGINX built-in _proxy_cache_ directive. In order to be able to cache the requests made to the introspection endpoint, except of the `proxy_cache_path` in http context and `proxy_cache` in location context, you have to add the following 3 directives in the location context of the introspection endpoint.
@@ -216,17 +242,17 @@ http {
             phantom_token_scopes "scope_a scope_b scope_c";
             phantom_token_realm "myGoodAPI";
         }
-        
+
         location curity {
             proxy_pass "https://server2.example.com:8443/oauth/v2/introspection";
-            
+
             proxy_cache_methods POST;
             proxy_cache my_cache;
             proxy_cache_key $request_body;
             proxy_ignore_headers Set-Cookie;
         }
     }
-    
+
     server {
         listen 8443;
         server_name server2.example.com;
@@ -234,7 +260,7 @@ http {
             proxy_pass "https://curity.example.com";
         }
     }
-}   
+}
 ```
 
 ## Cacheless Configuration
@@ -254,7 +280,7 @@ http {
             phantom_token_scopes "scope_a scope_b scope_c";
             phantom_token_realm "myGoodAPI";
         }
-        
+
         location curity {
             proxy_pass "https://server2.example.com:8443/oauth/v2/introspection";
             proxy_ignore_headers Set-Cookie;
@@ -262,7 +288,7 @@ http {
             proxy_buffers 4 16k;
         }
     }
-    
+
     server {
         listen 8443;
         server_name server2.example.com;
@@ -270,7 +296,7 @@ http {
             proxy_pass "https://curity.example.com";
         }
     }
-}   
+}
 ```
 
 ## Compatibility
@@ -294,7 +320,7 @@ Pre-built binaries of this module are provided for the following versions of NGI
 | CentOS Stream 9.0+                 | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.25.5.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.25.3.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.25.1.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.23.4.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.23.2.so) |
 
 ## Status
-This module is fit for production usage. 
+This module is fit for production usage.
 
 ## Development Setup
 If you wish to build this module from source, in order to run against other NGINX versions, or to change the module's logic, see the [Development Wiki](https://github.com/curityio/nginx_phantom_token_module/wiki) for instructions.
