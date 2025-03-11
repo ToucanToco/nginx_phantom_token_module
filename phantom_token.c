@@ -907,6 +907,9 @@ static char *set_client_credential_file_configuration_slot(
     ngx_encode_base64(base64encoded_client_credential,
                       &unencoded_client_credentials);
 
+    ngx_conf_log_error(NGX_LOG_INFO, config_setting, 0,
+                       "loaded client secret file");
+
     return NGX_CONF_OK;
 
 failed:
