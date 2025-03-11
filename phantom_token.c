@@ -844,7 +844,7 @@ static char *set_client_credential_file_configuration_slot(
     file.fd = ngx_open_file(path, NGX_FILE_RDONLY, NGX_FILE_OPEN, 0);
     if (file.fd == NGX_INVALID_FILE) {
         ngx_conf_log_error(NGX_LOG_ERR, config_setting, ngx_errno,
-                           "unable to open file %s: %s", path);
+                           "unable to open file %s", path);
         return NGX_CONF_ERROR;
     }
 
@@ -913,7 +913,8 @@ static char *set_client_credential_file_configuration_slot(
     return NGX_CONF_OK;
 
 failed:
-    if (ngx_close_file(file.fd) == NGX_FILE_ERROR) {
+    if (file.fd != NGX_INVALID_FILE &&
+        ngx_close_file(file.fd) == NGX_FILE_ERROR) {
         ngx_conf_log_error(NGX_LOG_ALERT, config_setting, ngx_errno,
                            "unable to close file %s", path);
     }
