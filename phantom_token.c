@@ -304,6 +304,10 @@ static ngx_int_t handler(ngx_http_request_t *request)
                 request->headers_in.authorization->value.len = module_context->jwt.len;
                 request->headers_in.authorization->value.data = module_context->jwt.data;
 
+                ngx_log_error(NGX_LOG_NOTICE, request->connection->log, 0,
+                              "Introspection request from %V succeeded",
+                              &request->uri);
+
                 if (module_context->original_content_type_header.data == NULL)
                 {
                     request->headers_in.headers.part.nelts = request->headers_in.headers.last->nelts = request->headers_in.headers.last->nelts - 1;
