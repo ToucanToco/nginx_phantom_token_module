@@ -281,6 +281,11 @@ static ngx_int_t handler(ngx_http_request_t *request)
         return NGX_DECLINED;
     }
 
+    ngx_log_error(
+        NGX_LOG_ERR, request->connection->log, 0,
+        "module_location_config->base64encoded_client_credential = %V",
+        module_location_config->base64encoded_client_credential);
+
     ngx_str_t encoded_client_credentials = module_location_config->base64encoded_client_credential;
 
     if (module_location_config->introspection_endpoint.len == 0)
