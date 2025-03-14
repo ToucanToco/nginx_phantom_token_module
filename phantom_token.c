@@ -575,11 +575,14 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
     ngx_snprintf(authorization_header_data, authorization_header_data_len, "Basic %V", &encoded_client_credentials);
 
-    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                  "authorization_header_data = %V", &authorization_header_data);
+    introspection_request->headers_in.authorization->value.data =
+        authorization_header_data;
+    introspection_request->headers_in.authorization->value.len =
+        authorization_header_data_len;
 
-    introspection_request->headers_in.authorization->value.data = authorization_header_data;
-    introspection_request->headers_in.authorization->value.len = authorization_header_data_len;
+    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                  "authorization_header_data = %V",
+                  &introspection_request->headers_in.authorization->value);
 
     ngx_http_set_ctx(request, module_context, ngx_curity_http_phantom_token_module)
 
