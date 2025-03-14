@@ -21,7 +21,7 @@
 #include <stdbool.h>
 #include <assert.h>
 
-#define UNENCODED_CLIENT_CREDENTIALS_BUF_LEN 255
+#define UNENCODED_CLIENT_CREDENTIALS_BUF_LEN 1024
 
 typedef struct
 {
@@ -280,11 +280,6 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
         return NGX_DECLINED;
     }
-
-    ngx_log_error(
-        NGX_LOG_ERR, request->connection->log, 0,
-        "module_location_config->base64encoded_client_credential = %V",
-        module_location_config->base64encoded_client_credential);
 
     ngx_str_t encoded_client_credentials = module_location_config->base64encoded_client_credential;
 
@@ -579,6 +574,9 @@ static ngx_int_t handler(ngx_http_request_t *request)
     }
 
     ngx_snprintf(authorization_header_data, authorization_header_data_len, "Basic %V", &encoded_client_credentials);
+
+    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                  "authorization_header_data = %V", &authorization_header_data);
 
     introspection_request->headers_in.authorization->value.data = authorization_header_data;
     introspection_request->headers_in.authorization->value.len = authorization_header_data_len;
