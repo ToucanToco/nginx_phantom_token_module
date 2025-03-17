@@ -221,6 +221,226 @@ ngx_module_t ngx_curity_http_phantom_token_module =
 };
 
 /**
+ * Remove an element from the list and the part that contains it.
+ *
+ * Ref:
+ * https://github.com/openresty/headers-more-nginx-module/blob/84a65d68687c9de5166fd49ddbbd68c6962234eb/src/ngx_http_headers_more_util.c#L265-L382
+ */
+ngx_int_t ngx_http_headers_more_rm_header_helper(ngx_list_t *l,
+                                                 ngx_list_part_t *cur,
+                                                 ngx_uint_t i) {
+    ngx_table_elt_t *data;
+    ngx_list_part_t *new, *part;
+
+    data = cur->elts;
+
+    if (i == 0) {
+        cur->elts = (char *)cur->elts + l->size;
+        cur->nelts--;
+
+        if (cur == l->last) {
+            if (cur->nelts == 0) {
+#if 1
+                part = &l->part;
+
+                if (part == cur) {
+                    cur->elts = (char *)cur->elts - l->size;
+                    /* do nothing */
+
+                } else {
+                    while (part->next != cur) {
+                        if (part->next == NULL) {
+                            return NGX_ERROR;
+                        }
+
+                        part = part->next;
+                    }
+
+                    l->last = part;
+                    part->next = NULL;
+                    l->nalloc = part->nelts;
+                }
+#endif
+
+            } else {
+                l->nalloc--;
+            }
+
+            return NGX_OK;
+        }
+
+        if (cur->nelts == 0) {
+            part = &l->part;
+
+            if (part == cur) {
+                assert(cur->next != NULL);
+
+                if (l->last == cur->next) {
+                    l->part = *(cur->next);
+                    l->last = part;
+                    l->nalloc = part->nelts;
+
+                } else {
+                    l->part = *(cur->next);
+                }
+
+            } else {
+                while (part->next != cur) {
+                    if (part->next == NULL) {
+                        return NGX_ERROR;
+                    }
+
+                    part = part->next;
+                }
+
+                part->next = cur->next;
+            }
+
+            return NGX_OK;
+        }
+
+        return NGX_OK;
+    }
+
+    if (i == cur->nelts - 1) {
+        cur->nelts--;
+
+        if (cur == l->last) {
+            l->nalloc = cur->nelts;
+        }
+
+        return NGX_OK;
+    }
+
+    new = ngx_palloc(l->pool, sizeof(ngx_list_part_t));
+    if (new == NULL) {
+        return NGX_ERROR;
+    }
+
+    new->elts = &data[i + 1];
+    new->nelts = cur->nelts - i - 1;
+    new->next = cur->next;
+
+    cur->nelts = i;
+    cur->next = new;
+    if (cur == l->last) {
+        l->last = new;
+        l->nalloc = new->nelts;
+    }
+
+    return NGX_OK;
+}
+
+/**
+ * Set the header with the given key from the list.
+ *
+ * Ref:
+ * https://github.com/nginx/nginx/blob/d31305653701bd99e8e5e6aa48094599a08f9f12/src/core/ngx_list.h#L55-L78
+ * https://github.com/openresty/headers-more-nginx-module/blob/84a65d68687c9de5166fd49ddbbd68c6962234eb/src/ngx_http_headers_more_headers_in.c#L220-L221
+ */
+static ngx_int_t set_header_helper(ngx_http_request_t *r, ngx_str_t key,
+                                   ngx_str_t value,
+                                   ngx_table_elt_t **output_header) {
+    ngx_list_part_t *part;
+    ngx_table_elt_t *h;
+    ngx_uint_t rc;
+    ngx_uint_t i;
+
+retry:
+
+    part = &r->headers_in.headers.part;
+    h = part->elts;
+
+    // Replace logic
+    for (i = 0;; i++) {
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
+
+            // Walk next part
+            part = part->next;
+            h = part->elts;
+            i = 0;
+        }
+
+        if (h[i].key.len != key.len ||
+            ngx_strncasecmp(h[i].key.data, key.data, key.len) != 0) {
+            continue; // Continue if not matched
+        }
+
+        // Found, and value is set to remove the header.
+        if (value.len == 0) {
+            rc = ngx_http_headers_more_rm_header_helper(&r->headers_in.headers,
+                                                        part, i);
+
+            assert(
+                !(r->headers_in.headers.part.next == NULL &&
+                  r->headers_in.headers.last != &r->headers_in.headers.part));
+
+            if (rc == NGX_OK) {
+                if (output_header) { // If output_header is set to old header,
+                                     // this clears it.
+                    *output_header = NULL;
+                }
+                goto retry; // Make sure to clean all occurrences.
+            }
+
+            return NGX_ERROR;
+        }
+
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "Replacing header "
+                      "with the same key %V, value %V, was %v",
+                      &key, &value, &h[i].value);
+        h[i].value = value;
+        if (output_header) {
+            *output_header = &h[i];
+        }
+        return NGX_OK;
+    }
+
+    if (value.len == 0) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Removed header %V",
+                      &key);
+        return NGX_OK;
+    }
+
+    // Add logic (field was not found)
+    h = ngx_list_push(&r->headers_in.headers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+    h->hash = 1;
+    h->key = key;
+    h->value = value;
+#if defined(nginx_version) && nginx_version >= 1023000
+    h->next = NULL;
+#endif
+    h->lowcase_key = ngx_pnalloc(r->pool, h->key.len);
+    if (h->lowcase_key == NULL) {
+        return NGX_ERROR;
+    }
+    ngx_strlow(h->lowcase_key, h->key.data, h->key.len);
+
+    if (output_header) {
+        *output_header = h;
+    }
+
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "Added header "
+                  "with key %V, value %V",
+                  &key, &value);
+
+    return NGX_OK;
+}
+
+static void clear_header_helper(ngx_http_request_t *r, ngx_str_t key) {
+    ngx_str_t value = ngx_null_string;
+    set_header_helper(r, key, value, NULL);
+}
+
+/**
  * Sets the request's Accept header to the given value.
  *
  * @param request the request to which the header value will be set
@@ -229,24 +449,32 @@ ngx_module_t ngx_curity_http_phantom_token_module =
  */
 static ngx_int_t set_accept_header_value(ngx_http_request_t *request, const char* value)
 {
-    ngx_table_elt_t  *accept_header;
-    accept_header = ngx_list_push(&request->headers_in.headers);
+    ngx_str_t accept = ngx_string("Accept");
+    ngx_str_t accept_value = {ngx_strlen(value), (u_char *)value};
+    ngx_table_elt_t *accept_header;
 
-    if (accept_header == NULL)
-    {
+    ngx_uint_t found =
+        set_header_helper(request, accept, accept_value, &accept_header);
+    if (found != NGX_OK) {
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                      "Failed to set Accept header value");
+                      "Failed to set header accept: %s", value);
         return NGX_ERROR;
     }
-
-    accept_header->hash = 1;
-    ngx_str_set(&accept_header->key, "Accept");
-    accept_header->value.len = ngx_strlen(value);
-    accept_header->value.data = (u_char *)value;
-    accept_header->lowcase_key = (u_char *)"accept";
-
     request->headers_in.accept = accept_header;
-    request->headers_in.headers.part.nelts = request->headers_in.headers.last->nelts;
+
+    // If last == part, we need to update the number of elements
+    if (request->headers_in.headers.part.next == NULL) {
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "request headers.part.nelts = %d, "
+                      "headers.last->nelts = %d, "
+                      "headers.nalloc = %d, headers.size = %d",
+                      request->headers_in.headers.part.nelts,
+                      request->headers_in.headers.last->nelts,
+                      request->headers_in.headers.nalloc,
+                      request->headers_in.headers.size);
+        request->headers_in.headers.part.nelts =
+            request->headers_in.headers.last->nelts;
+    }
 
     return NGX_OK;
 }
@@ -310,7 +538,22 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
                 if (module_context->original_content_type_header.data == NULL)
                 {
-                    request->headers_in.headers.part.nelts = request->headers_in.headers.last->nelts = request->headers_in.headers.last->nelts - 1;
+                    ngx_str_t ct = ngx_string("Content-Type");
+                    clear_header_helper(request, ct);
+
+                    // If last == part, we need to update the number of elements
+                    if (request->headers_in.headers.part.next == NULL) {
+                        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                                      "request2 headers.part.nelts = %d, "
+                                      "headers.last->nelts = %d, "
+                                      "headers.nalloc = %d, headers.size = %d",
+                                      request->headers_in.headers.part.nelts,
+                                      request->headers_in.headers.last->nelts,
+                                      request->headers_in.headers.nalloc,
+                                      request->headers_in.headers.size);
+                        request->headers_in.headers.part.nelts =
+                            request->headers_in.headers.last->nelts;
+                    }
                 }
                 else
                 {
@@ -532,22 +775,34 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
     if (request->headers_in.content_type == NULL)
     {
-        ngx_table_elt_t  *content_type_header;
-        content_type_header = ngx_list_push(&introspection_request->headers_in.headers);
-        if (content_type_header == NULL)
-        {
+        ngx_str_t ct = ngx_string("Content-Type");
+        ngx_str_t ct_value = ngx_string("application/x-www-form-urlencoded");
+        ngx_table_elt_t *ct_header;
+
+        ngx_uint_t found =
+            set_header_helper(introspection_request, ct, ct_value, &ct_header);
+        if (found != NGX_OK) {
             ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                          "Failed to set Content-type header value");
+                          "Failed to set header content-type: "
+                          "application/x-www-form-urlencoded");
             return NGX_ERROR;
         }
 
-        content_type_header->hash = 1;
-        ngx_str_set(&content_type_header->key, "Content-type");
-        ngx_str_set(&content_type_header->value, "application/x-www-form-urlencoded");
-        content_type_header->lowcase_key = (u_char *)"content-type";
+        introspection_request->headers_in.content_type = ct_header;
 
-        introspection_request->headers_in.content_type = content_type_header;
-        introspection_request->headers_in.headers.part.nelts = introspection_request->headers_in.headers.last->nelts;
+        // Update the number of headers
+        if (introspection_request->headers_in.headers.part.next == NULL) {
+            ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                          "introspection_request headers.part.nelts = %d, "
+                          "headers.last->nelts = %d, "
+                          "headers.nalloc = %d, headers.size = %d",
+                          introspection_request->headers_in.headers.part.nelts,
+                          introspection_request->headers_in.headers.last->nelts,
+                          introspection_request->headers_in.headers.nalloc,
+                          introspection_request->headers_in.headers.size);
+            introspection_request->headers_in.headers.part.nelts =
+                introspection_request->headers_in.headers.last->nelts;
+        }
     }
     else
     {
