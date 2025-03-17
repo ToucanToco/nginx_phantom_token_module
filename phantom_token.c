@@ -389,7 +389,7 @@ retry:
             return NGX_ERROR;
         }
 
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+        ngx_log_error(NGX_LOG_NOTICE, r->connection->log, 0,
                       "Replacing header "
                       "with the same key %V, value %V, was %v",
                       &key, &value, &h[i].value);
@@ -401,8 +401,8 @@ retry:
     }
 
     if (value.len == 0) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Removed header %V",
-                      &key);
+        ngx_log_error(NGX_LOG_NOTICE, r->connection->log, 0,
+                      "Removed header %V", &key);
         return NGX_OK;
     }
 
@@ -427,7 +427,7 @@ retry:
         *output_header = h;
     }
 
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+    ngx_log_error(NGX_LOG_NOTICE, r->connection->log, 0,
                   "Added header "
                   "with key %V, value %V",
                   &key, &value);
@@ -447,14 +447,13 @@ static void clear_header_helper(ngx_http_request_t *r, ngx_str_t key) {
  * @param value the value to set
  * @return NGX_OK if no error has occurred; NGX_ERROR if an error occurs.
  */
-static ngx_int_t set_accept_header_value(ngx_http_request_t *request, const char* value)
-{
+static ngx_int_t set_accept_header_value(ngx_http_request_t *request,
+                                         ngx_str_t value) {
     ngx_str_t accept = ngx_string("Accept");
-    ngx_str_t accept_value = {ngx_strlen(value), (u_char *)value};
     ngx_table_elt_t *accept_header;
 
     ngx_uint_t found =
-        set_header_helper(request, accept, accept_value, &accept_header);
+        set_header_helper(request, accept, value, &accept_header);
     if (found != NGX_OK) {
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                       "Failed to set header accept: %s", value);
@@ -464,14 +463,6 @@ static ngx_int_t set_accept_header_value(ngx_http_request_t *request, const char
 
     // If last == part, we need to update the number of elements
     if (request->headers_in.headers.part.next == NULL) {
-        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                      "request headers.part.nelts = %d, "
-                      "headers.last->nelts = %d, "
-                      "headers.nalloc = %d, headers.size = %d",
-                      request->headers_in.headers.part.nelts,
-                      request->headers_in.headers.last->nelts,
-                      request->headers_in.headers.nalloc,
-                      request->headers_in.headers.size);
         request->headers_in.headers.part.nelts =
             request->headers_in.headers.last->nelts;
     }
@@ -543,14 +534,6 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
                     // If last == part, we need to update the number of elements
                     if (request->headers_in.headers.part.next == NULL) {
-                        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                                      "request2 headers.part.nelts = %d, "
-                                      "headers.last->nelts = %d, "
-                                      "headers.nalloc = %d, headers.size = %d",
-                                      request->headers_in.headers.part.nelts,
-                                      request->headers_in.headers.last->nelts,
-                                      request->headers_in.headers.nalloc,
-                                      request->headers_in.headers.size);
                         request->headers_in.headers.part.nelts =
                             request->headers_in.headers.last->nelts;
                     }
@@ -563,9 +546,10 @@ static ngx_int_t handler(ngx_http_request_t *request)
                 if (request->headers_in.accept == NULL)
                 {
                     ngx_int_t result;
+                    ngx_str_t accept_value = ngx_string("*/*");
 
-                    if ((result = set_accept_header_value(request, "*/*") != NGX_OK))
-                    {
+                    if ((result = set_accept_header_value(
+                                      request, accept_value) != NGX_OK)) {
                         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                                       "Failed to set Accept header value");
                         return result;
@@ -759,9 +743,10 @@ static ngx_int_t handler(ngx_http_request_t *request)
     if (request->headers_in.accept == NULL)
     {
         ngx_int_t result;
+        ngx_str_t accept_value = ngx_string("application/jwt");
 
-        if ((result = set_accept_header_value(introspection_request, "application/jwt") != NGX_OK))
-        {
+        if ((result = set_accept_header_value(introspection_request,
+                                              accept_value) != NGX_OK)) {
             return result;
         }
     }
@@ -792,14 +777,6 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
         // Update the number of headers
         if (introspection_request->headers_in.headers.part.next == NULL) {
-            ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                          "introspection_request headers.part.nelts = %d, "
-                          "headers.last->nelts = %d, "
-                          "headers.nalloc = %d, headers.size = %d",
-                          introspection_request->headers_in.headers.part.nelts,
-                          introspection_request->headers_in.headers.last->nelts,
-                          introspection_request->headers_in.headers.nalloc,
-                          introspection_request->headers_in.headers.size);
             introspection_request->headers_in.headers.part.nelts =
                 introspection_request->headers_in.headers.last->nelts;
         }
@@ -834,10 +811,6 @@ static ngx_int_t handler(ngx_http_request_t *request)
         authorization_header_data;
     introspection_request->headers_in.authorization->value.len =
         authorization_header_data_len;
-
-    ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                  "authorization_header_data = %V",
-                  &introspection_request->headers_in.authorization->value);
 
     ngx_http_set_ctx(request, module_context, ngx_curity_http_phantom_token_module)
 
