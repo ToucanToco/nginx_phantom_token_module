@@ -98,6 +98,8 @@ docker rm -f nginx-modules
 if [ -n "$PUSH" ]; then
   docker push quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO-ngx$NGINX_VERSION
   docker push quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO
-  docker push quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO-ngx$NGINX_VERSION
-  docker push quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO
+  if [ -n "$TAG_NAME" ] && [ -n "$VERSION_CORE" ]; then
+    docker push quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO-ngx$NGINX_VERSION
+    docker push quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO
+  fi
 fi
