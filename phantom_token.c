@@ -122,6 +122,7 @@ static char *set_client_credential_file_configuration_slot(
     ngx_conf_t *config_setting, ngx_command_t *command, void *result);
 
 static const char BEARER[] = "Bearer ";
+static const char BEARER_UNDERSCORE[] = "Bearer_";
 static const size_t BEARER_SIZE = sizeof(BEARER) - 1;
 
 static ngx_command_t phantom_token_module_directives[] = {
@@ -219,6 +220,31 @@ ngx_module_t ngx_curity_http_phantom_token_module =
     NULL, /* exit master */
     NGX_MODULE_V1_PADDING
 };
+
+static ngx_table_elt_t *find_header_in(ngx_http_request_t *r,
+                                       const char *header_name) {
+    if (!r) {
+        return NULL;
+    }
+    ngx_list_part_t *part;
+    ngx_table_elt_t *header;
+    part = &r->headers_in.headers.part;
+    header = part->elts;
+    int i = part->nelts - 1;
+    while (1) {
+        if (strcasecmp((char *)header[i].key.data, header_name) == 0) {
+            return &header[i];
+        }
+        if (--i < 0) {
+            if (!part->next)
+                break;
+            part = part->next;
+            header = part->elts;
+            i = part->nelts - 1;
+        }
+    }
+    return NULL;
+}
 
 /**
  * Remove an element from the list and the part that contains it.
@@ -512,6 +538,7 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
     phantom_token_module_context_t *module_context = ngx_http_get_module_ctx(request, ngx_curity_http_phantom_token_module);
 
+    // On callback.
     if (module_context != NULL)
     {
         if (module_context->done)
@@ -603,24 +630,42 @@ static ngx_int_t handler(ngx_http_request_t *request)
         return NGX_AGAIN;
     }
 
-    // return unauthorized when no Authorization header is present
-    if (!request->headers_in.authorization || request->headers_in.authorization->value.len <= 0)
-    {
-        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                      "Authorization header not present");
+    u_char *bearer_token_pos = NULL;
 
-        return set_www_authenticate_header(request, module_location_config, NULL);
+    // Check if it's websocket
+    if (request->headers_in.upgrade &&
+        request->headers_in.upgrade->value.len > 0 &&
+        !ngx_strncasecmp(request->headers_in.upgrade->value.data,
+                         (u_char *)"websocket", 9)) {
+
+        // Get bearer from Sec-Websocket-Protocol header
+        ngx_table_elt_t *sec_websocket_protocol_header = find_header_in(request, "Sec-WebSocket-Protocol");
+
+        if (sec_websocket_protocol_header == NULL) {
+            // No Sec-WebSocket-Protocol header found
+            ngx_log_error(NGX_LOG_WARN, request->connection->log, 0,
+                          "No Sec-WebSocket-Protocol header found, not eligible for introspection");
+           return set_www_authenticate_header(request, module_location_config, NULL);
+        }
+
+        if (sec_websocket_protocol_header->value.len == 0) {
+            // Empty Sec-WebSocket-Protocol header found
+            ngx_log_error(NGX_LOG_WARN, request->connection->log, 0,
+                          "Empty Sec-WebSocket-Protocol header found, not eligible for introspection");
+           return set_www_authenticate_header(request, module_location_config, NULL);
+        }
+
+        // Sec-WebSocket-Protocol is a multi value comma separated header, search for "Bearer_"
+        // Loop over the header value length
+        bearer_token_pos = ngx_strcasestrn(sec_websocket_protocol_header->value.data, (char*)BEARER_UNDERSCORE, BEARER_SIZE - 1);
+    } else if (request->headers_in.authorization && request->headers_in.authorization->value.len > 0) {
+        bearer_token_pos = ngx_strcasestrn((u_char*)request->headers_in.authorization->value.data,
+        (char*)BEARER, BEARER_SIZE - 1);
     }
 
-    u_char *bearer_token_pos;
-
-    if ((bearer_token_pos = ngx_strcasestrn((u_char*)request->headers_in.authorization->value.data,
-        (char*)BEARER, BEARER_SIZE - 1)) == NULL)
-    {
-        // return unauthorized when Authorization header is not Bearer
-
+    if (bearer_token_pos == NULL) {
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                      "Authorization header does not contain a bearer token");
+            "Authorization header does not contain a bearer token");
 
         return set_www_authenticate_header(request, module_location_config, NULL);
     }
