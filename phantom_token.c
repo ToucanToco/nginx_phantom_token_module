@@ -40,6 +40,8 @@ typedef struct
     ngx_str_t jwt;
     ngx_str_t original_accept_header;
     ngx_str_t original_content_type_header;
+    ngx_str_t original_sec_websocket_key;
+    ngx_str_t original_sec_websocket_version;
 } phantom_token_module_context_t;
 
 static ngx_int_t post_configuration(ngx_conf_t *config);
@@ -121,8 +123,8 @@ static char* set_client_credential_configuration_slot(ngx_conf_t *config_setting
 static char *set_client_credential_file_configuration_slot(
     ngx_conf_t *config_setting, ngx_command_t *command, void *result);
 
-static const char BEARER[] = "Bearer ";
-static const size_t BEARER_SIZE = sizeof(BEARER) - 1;
+static ngx_str_t BEARER = ngx_string("Bearer ");
+static ngx_str_t BEARER_UNDERSCORE = ngx_string("Bearer_");
 
 static ngx_command_t phantom_token_module_directives[] = {
     {
@@ -219,6 +221,37 @@ ngx_module_t ngx_curity_http_phantom_token_module =
     NULL, /* exit master */
     NGX_MODULE_V1_PADDING
 };
+
+static ngx_table_elt_t *find_header_in(ngx_http_request_t *r, ngx_str_t key) {
+    ngx_list_part_t *part;
+    ngx_table_elt_t *h;
+    ngx_uint_t i;
+
+    part = &r->headers_in.headers.part;
+    h = part->elts;
+
+    for (i = 0;; i++) {
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
+
+            // Walk next part
+            part = part->next;
+            h = part->elts;
+            i = 0;
+        }
+
+        if (h[i].key.len != key.len ||
+            ngx_strncasecmp(h[i].key.data, key.data, key.len) != 0) {
+            continue; // Continue if not matched
+        }
+
+        // Found
+        return &h[i];
+    }
+    return NULL;
+}
 
 /**
  * Remove an element from the list and the part that contains it.
@@ -342,9 +375,11 @@ static ngx_int_t set_header_helper(ngx_http_request_t *r, ngx_str_t key,
                                    ngx_str_t value,
                                    ngx_table_elt_t **output_header) {
     ngx_list_part_t *part;
-    ngx_table_elt_t *h;
+    ngx_table_elt_t *h, *matched;
     ngx_uint_t rc;
     ngx_uint_t i;
+
+    matched = NULL;
 
 retry:
 
@@ -364,13 +399,20 @@ retry:
             i = 0;
         }
 
-        if (h[i].key.len != key.len ||
-            ngx_strncasecmp(h[i].key.data, key.data, key.len) != 0) {
-            continue; // Continue if not matched
+        if (h[i].key.len == key.len &&
+            ngx_strncasecmp(h[i].key.data, key.data, key.len) == 0) {
+            goto matched;
         }
 
-        // Found, and value is set to remove the header.
-        if (value.len == 0) {
+        /* not matched */
+
+        continue;
+
+    matched:
+
+        // If value is 0, remove the header. If there are duplicates, remove
+        // them all.
+        if (value.len == 0 || (matched && matched != &h[i])) {
             rc = ngx_http_headers_more_rm_header_helper(&r->headers_in.headers,
                                                         part, i);
 
@@ -389,20 +431,29 @@ retry:
             return NGX_ERROR;
         }
 
-        ngx_log_error(NGX_LOG_NOTICE, r->connection->log, 0,
-                      "Replacing header "
-                      "with the same key %V, value %V, was %v",
-                      &key, &value, &h[i].value);
+        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                       "Replacing header with the same key %V", &key);
         h[i].value = value;
         if (output_header) {
             *output_header = &h[i];
         }
+        if (matched == NULL) {
+            matched = &h[i];
+        }
+    }
+
+    if (matched) {
         return NGX_OK;
     }
 
     if (value.len == 0) {
-        ngx_log_error(NGX_LOG_NOTICE, r->connection->log, 0,
-                      "Removed header %V", &key);
+        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                       "Removed header %V", &key);
+        return NGX_OK;
+    }
+
+    if (r->headers_in.headers.last == NULL) {
+        /* must be 400 bad request */
         return NGX_OK;
     }
 
@@ -427,10 +478,10 @@ retry:
         *output_header = h;
     }
 
-    ngx_log_error(NGX_LOG_NOTICE, r->connection->log, 0,
-                  "Added header "
-                  "with key %V, value %V",
-                  &key, &value);
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "Added header "
+                   "with key %V",
+                   &key);
 
     return NGX_OK;
 }
@@ -449,17 +500,14 @@ static void clear_header_helper(ngx_http_request_t *r, ngx_str_t key) {
  */
 static ngx_int_t set_accept_header_value(ngx_http_request_t *request,
                                          ngx_str_t value) {
-    ngx_str_t accept = ngx_string("Accept");
-    ngx_table_elt_t *accept_header;
-
+    static ngx_str_t accept = ngx_string("Accept");
     ngx_uint_t found =
-        set_header_helper(request, accept, value, &accept_header);
+        set_header_helper(request, accept, value, &request->headers_in.accept);
     if (found != NGX_OK) {
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                      "Failed to set header accept: %s", value);
+                      "Failed to set header accept: %V", &value);
         return NGX_ERROR;
     }
-    request->headers_in.accept = accept_header;
 
     // If last == part, we need to update the number of elements
     if (request->headers_in.headers.part.next == NULL) {
@@ -512,6 +560,7 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
     phantom_token_module_context_t *module_context = ngx_http_get_module_ctx(request, ngx_curity_http_phantom_token_module);
 
+    // On callback.
     if (module_context != NULL)
     {
         if (module_context->done)
@@ -520,8 +569,9 @@ static ngx_int_t handler(ngx_http_request_t *request)
             if (module_context->status == NGX_HTTP_OK)
             {
                 // Introspection was successful. Replace the incoming Authorization header with one that has the JWT.
-                request->headers_in.authorization->value.len = module_context->jwt.len;
-                request->headers_in.authorization->value.data = module_context->jwt.data;
+                static ngx_str_t authorization = ngx_string("Authorization");
+                set_header_helper(request, authorization, module_context->jwt,
+                                  &request->headers_in.authorization);
 
                 ngx_log_error(NGX_LOG_NOTICE, request->connection->log, 0,
                               "Introspection request from %V succeeded",
@@ -529,7 +579,7 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
                 if (module_context->original_content_type_header.data == NULL)
                 {
-                    ngx_str_t ct = ngx_string("Content-Type");
+                    static ngx_str_t ct = ngx_string("Content-Type");
                     clear_header_helper(request, ct);
 
                     // If last == part, we need to update the number of elements
@@ -546,7 +596,7 @@ static ngx_int_t handler(ngx_http_request_t *request)
                 if (request->headers_in.accept == NULL)
                 {
                     ngx_int_t result;
-                    ngx_str_t accept_value = ngx_string("*/*");
+                    static ngx_str_t accept_value = ngx_string("*/*");
 
                     if ((result = set_accept_header_value(
                                       request, accept_value) != NGX_OK)) {
@@ -558,6 +608,38 @@ static ngx_int_t handler(ngx_http_request_t *request)
                 else
                 {
                     request->headers_in.accept->value = module_context->original_accept_header;
+                }
+
+                if (module_context->original_sec_websocket_key.len > 0) {
+                    ngx_int_t result;
+                    static ngx_str_t sec_websocket_key =
+                        ngx_string("Sec-WebSocket-Key");
+                    if ((result = set_header_helper(
+                             request, sec_websocket_key,
+                             module_context->original_sec_websocket_key,
+                             NULL)) != NGX_OK) {
+                        ngx_log_error(
+                            NGX_LOG_ERR, request->connection->log, 0,
+                            "Failed to set header Sec-WebSocket-Key: %V",
+                            &module_context->original_sec_websocket_key);
+                        return result;
+                    }
+                }
+
+                if (module_context->original_sec_websocket_version.len > 0) {
+                    ngx_int_t result;
+                    static ngx_str_t sec_websocket_version =
+                        ngx_string("Sec-WebSocket-Version");
+                    if ((result = set_header_helper(
+                             request, sec_websocket_version,
+                             module_context->original_sec_websocket_version,
+                             NULL)) != NGX_OK) {
+                        ngx_log_error(
+                            NGX_LOG_ERR, request->connection->log, 0,
+                            "Failed to set header Sec-WebSocket-Version: %V",
+                            &module_context->original_sec_websocket_version);
+                        return result;
+                    }
                 }
 
                 return NGX_OK;
@@ -603,35 +685,81 @@ static ngx_int_t handler(ngx_http_request_t *request)
         return NGX_AGAIN;
     }
 
-    // return unauthorized when no Authorization header is present
-    if (!request->headers_in.authorization || request->headers_in.authorization->value.len <= 0)
-    {
-        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
-                      "Authorization header not present");
+    ngx_str_t bearer_token = ngx_null_string;
+    // Check if it's websocket
+    if (request->headers_in.upgrade &&
+        request->headers_in.upgrade->value.len > 0 &&
+        !ngx_strncasecmp(request->headers_in.upgrade->value.data,
+                         (u_char *)"websocket", 9)) {
 
-        return set_www_authenticate_header(request, module_location_config, NULL);
+        ngx_log_error(NGX_LOG_NOTICE, request->connection->log, 0,
+                      "GraphQL WebSocket introspection request from %V",
+                      &request->uri);
+
+        // Get bearer from Sec-Websocket-Protocol header
+        static ngx_str_t sec_websocket_protocol =
+            ngx_string("Sec-WebSocket-Protocol");
+        ngx_table_elt_t *sec_websocket_protocol_header =
+            find_header_in(request, sec_websocket_protocol);
+        if (sec_websocket_protocol_header == NULL) {
+            // No Sec-WebSocket-Protocol header found
+            ngx_log_error(NGX_LOG_WARN, request->connection->log, 0,
+                          "No Sec-WebSocket-Protocol header found, "
+                          "not eligible for introspection");
+            return set_www_authenticate_header(request, module_location_config,
+                                               NULL);
+        }
+
+        if (sec_websocket_protocol_header->value.len == 0) {
+            // Empty Sec-WebSocket-Protocol header found
+            ngx_log_error(NGX_LOG_WARN, request->connection->log, 0,
+                          "Empty Sec-WebSocket-Protocol header found, not eligible for introspection");
+            return set_www_authenticate_header(request, module_location_config,
+                                               NULL);
+        }
+
+        // Sec-WebSocket-Protocol is a multi value comma separated header, search for "Bearer_"
+        // Loop over the header value length
+        bearer_token.data = ngx_strcasestrn(
+            (u_char *)sec_websocket_protocol_header->value.data,
+            (char *)BEARER_UNDERSCORE.data, BEARER_UNDERSCORE.len - 1);
+        bearer_token.len =
+            sec_websocket_protocol_header->value.len -
+            (bearer_token.data - sec_websocket_protocol_header->value.data);
+    } else if (request->headers_in.authorization && request->headers_in.authorization->value.len > 0) {
+        bearer_token.data = ngx_strcasestrn(
+            (u_char *)request->headers_in.authorization->value.data,
+            (char *)BEARER.data, BEARER.len - 1);
+        bearer_token.len =
+            request->headers_in.authorization->value.len -
+            (bearer_token.data - request->headers_in.authorization->value.data);
     }
 
-    u_char *bearer_token_pos;
-
-    if ((bearer_token_pos = ngx_strcasestrn((u_char*)request->headers_in.authorization->value.data,
-        (char*)BEARER, BEARER_SIZE - 1)) == NULL)
-    {
-        // return unauthorized when Authorization header is not Bearer
-
+    if (bearer_token.data == NULL) {
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                       "Authorization header does not contain a bearer token");
 
-        return set_www_authenticate_header(request, module_location_config, NULL);
+        return set_www_authenticate_header(request, module_location_config,
+                                           NULL);
     }
 
-    bearer_token_pos += BEARER_SIZE;
+    // Skip "Bearer "
+    bearer_token.data += BEARER.len;
+    bearer_token.len -= BEARER.len;
 
     // Remove any extra whitespace after the "Bearer " part of the authorization request header
-    while (isspace(*bearer_token_pos))
-    {
-        bearer_token_pos++;
+    while (isspace(*bearer_token.data)) {
+        bearer_token.data++;
+        bearer_token.len--;
     }
+
+    // Read until the next comma or space or nothing
+    ngx_uint_t i = 0;
+    while (i < bearer_token.len && !isspace(bearer_token.data[i]) &&
+           bearer_token.data[i] != ',') {
+        i++;
+    }
+    bearer_token.len = i;
 
     module_context = ngx_pcalloc(request->pool, sizeof(phantom_token_module_context_t));
 
@@ -665,7 +793,9 @@ static ngx_int_t handler(ngx_http_request_t *request)
     }
 
     // extract access token from header
-    u_char *introspect_body_data = ngx_pcalloc(request->pool, request->headers_in.authorization->value.len);
+    u_char *introspect_body_data =
+        ngx_pcalloc(request->pool,
+                    6 + bearer_token.len); // len("token=") + bearer_token.len
 
     if (introspect_body_data == NULL)
     {
@@ -683,13 +813,14 @@ static ngx_int_t handler(ngx_http_request_t *request)
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    ngx_snprintf(introspect_body_data, request->headers_in.authorization->value.len, "token=%s", bearer_token_pos);
+    ngx_snprintf(introspect_body_data, 6 + bearer_token.len, "token=%V",
+                 &bearer_token);
 
     introspection_body->data = introspect_body_data;
-    introspection_body->len = ngx_strlen(introspection_body->data);
+    introspection_body->len = 6 + bearer_token.len;
 
-    introspection_request->request_body = ngx_pcalloc(request->pool, sizeof(ngx_http_request_body_t));
-
+    introspection_request->request_body =
+        ngx_pcalloc(request->pool, sizeof(ngx_http_request_body_t));
     if (introspection_request->request_body == NULL)
     {
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
@@ -697,8 +828,8 @@ static ngx_int_t handler(ngx_http_request_t *request)
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    ngx_http_request_body_t *introspection_request_body = ngx_pcalloc(request->pool, sizeof(ngx_http_request_body_t));
-
+    ngx_http_request_body_t *introspection_request_body =
+        ngx_pcalloc(request->pool, sizeof(ngx_http_request_body_t));
     if (introspection_request_body == NULL)
     {
         ngx_log_error(
@@ -707,8 +838,8 @@ static ngx_int_t handler(ngx_http_request_t *request)
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    ngx_buf_t *introspection_request_body_buffer = ngx_calloc_buf(request->pool);
-
+    ngx_buf_t *introspection_request_body_buffer =
+        ngx_calloc_buf(request->pool);
     if (introspection_request_body_buffer == NULL)
     {
         ngx_log_error(
@@ -724,7 +855,6 @@ static ngx_int_t handler(ngx_http_request_t *request)
     introspection_request_body_buffer->temporary = true;
 
     introspection_request_body->bufs = ngx_alloc_chain_link(request->pool);
-
     if (introspection_request_body->bufs == NULL)
     {
         ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
@@ -743,10 +873,9 @@ static ngx_int_t handler(ngx_http_request_t *request)
     if (request->headers_in.accept == NULL)
     {
         ngx_int_t result;
-        ngx_str_t accept_value = ngx_string("application/jwt");
-
+        static ngx_str_t application_jwt = ngx_string("application/jwt");
         if ((result = set_accept_header_value(introspection_request,
-                                              accept_value) != NGX_OK)) {
+                                              application_jwt) != NGX_OK)) {
             return result;
         }
     }
@@ -760,20 +889,18 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
     if (request->headers_in.content_type == NULL)
     {
-        ngx_str_t ct = ngx_string("Content-Type");
-        ngx_str_t ct_value = ngx_string("application/x-www-form-urlencoded");
-        ngx_table_elt_t *ct_header;
-
+        static ngx_str_t ct = ngx_string("Content-Type");
+        static ngx_str_t ct_value =
+            ngx_string("application/x-www-form-urlencoded");
         ngx_uint_t found =
-            set_header_helper(introspection_request, ct, ct_value, &ct_header);
+            set_header_helper(introspection_request, ct, ct_value,
+                              &introspection_request->headers_in.content_type);
         if (found != NGX_OK) {
             ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
                           "Failed to set header content-type: "
                           "application/x-www-form-urlencoded");
             return NGX_ERROR;
         }
-
-        introspection_request->headers_in.content_type = ct_header;
 
         // Update the number of headers
         if (introspection_request->headers_in.headers.part.next == NULL) {
@@ -795,8 +922,8 @@ static ngx_int_t handler(ngx_http_request_t *request)
 
     // set authorization credentials header to Basic base64encoded_client_credential
     size_t authorization_header_data_len = encoded_client_credentials.len + sizeof("Basic ") - 1;
-    u_char *authorization_header_data = ngx_pcalloc(request->pool, authorization_header_data_len);
-
+    u_char *authorization_header_data =
+        ngx_pcalloc(request->pool, authorization_header_data_len);
     if (authorization_header_data == NULL)
     {
         ngx_log_error(
@@ -805,14 +932,31 @@ static ngx_int_t handler(ngx_http_request_t *request)
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    ngx_snprintf(authorization_header_data, authorization_header_data_len, "Basic %V", &encoded_client_credentials);
+    ngx_snprintf(authorization_header_data, authorization_header_data_len,
+                 "Basic %V", &encoded_client_credentials);
 
-    introspection_request->headers_in.authorization->value.data =
-        authorization_header_data;
-    introspection_request->headers_in.authorization->value.len =
-        authorization_header_data_len;
+    static ngx_str_t authorization = ngx_string("Authorization");
+    ngx_str_t authorization_value = {authorization_header_data_len,
+                                     authorization_header_data};
 
-    ngx_http_set_ctx(request, module_context, ngx_curity_http_phantom_token_module)
+    // Save related websocket headers to not lose after subrequest
+    static ngx_str_t sec_websocket_key = ngx_string("Sec-WebSocket-Key");
+    ngx_table_elt_t *elt;
+    if ((elt = find_header_in(request, sec_websocket_key)) != NULL) {
+        module_context->original_sec_websocket_key = elt->value;
+    }
+
+    static ngx_str_t sec_websocket_version =
+        ngx_string("Sec-WebSocket-Version");
+    if ((elt = find_header_in(request, sec_websocket_version)) != NULL) {
+        module_context->original_sec_websocket_version = elt->value;
+    }
+
+    set_header_helper(introspection_request, authorization, authorization_value,
+                      &introspection_request->headers_in.authorization);
+
+    ngx_http_set_ctx(request, module_context,
+                     ngx_curity_http_phantom_token_module);
 
     return NGX_AGAIN;
 }
@@ -828,9 +972,6 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *request, voi
     u_char *p = NULL;
     size_t body_buffer_size = 0;
     bool read_response = false;
-
-    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "auth request done status = %d",
-                   request->headers_out.status);
 
     module_context->status = request->headers_out.status;
 
@@ -877,7 +1018,7 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *request, voi
 #endif
 
     jwt_len = request->headers_out.content_length_n;
-    bearer_jwt_len = BEARER_SIZE + jwt_len;
+    bearer_jwt_len = BEARER.len + jwt_len;
 
     // When caching is not used, the introspection response is read directly.
     // This method only receives a single response buffer per introspection request, which needs to contain the full JWT.
@@ -938,10 +1079,8 @@ static ngx_int_t introspection_response_handler(ngx_http_request_t *request, voi
         return introspection_subrequest_status_code;
     }
 
-    p = ngx_copy(module_context->jwt.data, BEARER, BEARER_SIZE);
-
+    p = ngx_copy(module_context->jwt.data, BEARER.data, BEARER.len);
     ngx_memcpy(p, jwt_start, jwt_len);
-
     if (cache_data.len > 0)
     {
         ngx_pfree(request->pool, cache_data.data);
@@ -1183,7 +1322,8 @@ static ngx_int_t set_www_authenticate_header(ngx_http_request_t *request, phanto
     static const u_char ERROR_CODE_PREFIX[] = "error=\"";
     static const size_t ERROR_CODE_PREFIX_SIZE = sizeof(ERROR_CODE_PREFIX) - 1;
 
-    size_t bearer_data_size = BEARER_SIZE + sizeof('\0'); // Add one for the nul byte
+    size_t bearer_data_size =
+        BEARER.len + sizeof('\0'); // Add one for the nul byte
     bool realm_provided = module_location_config->realm.len > 0;
     bool scopes_provided = module_location_config->space_separated_scopes.len > 0;
     bool error_code_provided = error_code != NULL;
@@ -1225,7 +1365,7 @@ static ngx_int_t set_www_authenticate_header(ngx_http_request_t *request, phanto
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    u_char *p = ngx_cpymem(bearer_data, BEARER, BEARER_SIZE);
+    u_char *p = ngx_cpymem(bearer_data, BEARER.data, BEARER.len);
 
     if (realm_provided)
     {
