@@ -63,7 +63,7 @@ pipeline {
 ```
 EOF
 
-        tmp/bin/gh release create ${env.BRANCH_NAME} --title "${env.BRANCH_NAME}" --body-file release_body.md --generate-notes build/*
+        tmp/bin/gh release create ${env.BRANCH_NAME} --title "${env.BRANCH_NAME}" --notes-file release_body.md --generate-notes build/*
         """
       }
     }
