@@ -77,6 +77,12 @@ if [[ ! -r $NGINX_TARBALL ]]; then
   $DOWNLOAD_PROGRAM https://nginx.org/download/nginx-"${NGINX_VERSION}".tar.gz
 fi
 
+cleanup() {
+  docker buildx rm builder || true
+}
+trap cleanup EXIT INT TERM
+cleanup
+docker buildx create --name builder --driver docker-container --use
 docker buildx build --platform=linux/amd64,linux/arm64/v8 \
   -t "nginx-module-builder:$LINUX_DISTRO" \
   -t quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO-ngx$NGINX_VERSION \
