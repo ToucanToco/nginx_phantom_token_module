@@ -77,18 +77,8 @@ if [[ ! -r $NGINX_TARBALL ]]; then
   $DOWNLOAD_PROGRAM https://nginx.org/download/nginx-"${NGINX_VERSION}".tar.gz
 fi
 
-cleanup() {
-  docker buildx rm builder || true
-}
-trap cleanup EXIT INT TERM
-cleanup
-docker buildx create --name builder --driver docker-container --use
-docker buildx build --platform=linux/amd64,linux/arm64/v8 \
+docker build \
   -t "nginx-module-builder:$LINUX_DISTRO" \
-  -t quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO-ngx$NGINX_VERSION \
-  -t quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO \
-  -t quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO-ngx$NGINX_VERSION \
-  -t quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO \
   --build-arg NGINX_VERSION="$NGINX_VERSION" \
   -f builders/$LINUX_DISTRO.Dockerfile .
 if [ $? -ne 0 ]; then
@@ -103,16 +93,26 @@ docker cp nginx-modules:/ngx_curity_http_phantom_token_module.so ./build/$LIBRAR
 docker rm -f nginx-modules
 
 if [ -n "$PUSH" ]; then
+  cleanup() {
+    docker buildx rm builder || true
+  }
+  trap cleanup EXIT INT TERM
+  cleanup
+  docker buildx create --name builder --driver docker-container --use
   docker buildx build --platform=linux/amd64,linux/arm64/v8 \
   -t "nginx-module-builder:$LINUX_DISTRO" \
   -t quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO-ngx$NGINX_VERSION \
   -t quay.io/toucantoco/ngx-auth-module:$VERSION-$LINUX_DISTRO \
+  --build-arg NGINX_VERSION="$NGINX_VERSION" \
+  -f builders/$LINUX_DISTRO.Dockerfile . \
   --push
   if [ -n "$TAG_NAME" ] && [ -n "$VERSION_CORE" ]; then
     docker buildx build --platform=linux/amd64,linux/arm64/v8 \
     -t "nginx-module-builder:$LINUX_DISTRO" \
     -t quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO-ngx$NGINX_VERSION \
     -t quay.io/toucantoco/ngx-auth-module:latest-$LINUX_DISTRO \
+    --build-arg NGINX_VERSION="$NGINX_VERSION" \
+    -f builders/$LINUX_DISTRO.Dockerfile . \
     --push
   fi
 fi
