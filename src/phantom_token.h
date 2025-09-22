@@ -17,6 +17,9 @@
 #ifndef PHANTOM_TOKEN
 #define PHANTOM_TOKEN
 
+#include <ngx_core.h>
+#include <ngx_string.h>
+
 typedef struct
 {
     ngx_str_t introspection_endpoint;

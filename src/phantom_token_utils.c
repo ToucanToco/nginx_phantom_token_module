@@ -79,7 +79,7 @@ ngx_int_t utils_write_error_response(ngx_http_request_t *request, ngx_int_t stat
         if (rc == NGX_ERROR || rc > NGX_OK || request->header_only) {
             return rc;
         }
-        
+
         body->pos = json_error_data;
         body->last = json_error_data + error_len;
         body->memory = 1;
