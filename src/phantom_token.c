@@ -220,7 +220,7 @@ ngx_int_t handler(ngx_http_request_t *request)
     if (request->method == NGX_HTTP_OPTIONS)
     {
         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "Not processing OPTIONS request");
-        return NGX_HTTP_NO_CONTENT;
+        return NGX_OK;
     }
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "Handling request to convert token to JWT");
@@ -315,13 +315,9 @@ ngx_int_t handler(ngx_http_request_t *request)
     ngx_http_request_t *introspection_request;
 
     if (ngx_http_subrequest(
-        request,
-        &module_location_config->introspection_endpoint,
-        NULL, 
-        &introspection_request,
-        introspection_request_callback, 
-        NGX_HTTP_SUBREQUEST_WAITED) != NGX_OK)
-    {
+            request, &module_location_config->introspection_endpoint, NULL,
+            &introspection_request, introspection_request_callback,
+            NGX_HTTP_SUBREQUEST_WAITED) != NGX_OK) {
         return utils_write_error_response(request, NGX_HTTP_INTERNAL_SERVER_ERROR, module_location_config);
     }
 
@@ -418,7 +414,7 @@ static ngx_int_t introspection_response_handler(
         if (request->headers_out.status != NGX_HTTP_NO_CONTENT) {
             ngx_log_error(NGX_LOG_ERR, request->connection->log, 0, "Introspection subrequest returned response code: %d", request->headers_out.status);
         }
-        
+
         module_context->done = 1;
         return introspection_subrequest_status_code;
     }
@@ -447,7 +443,7 @@ static ngx_int_t introspection_response_handler(
     {
         read_response = true;
     }
-    
+
 #else
     read_response = true;
 #endif
@@ -469,7 +465,7 @@ static ngx_int_t introspection_response_handler(
         // With default configuration, the total buffer memory size is 4KB and the response header size might be 332 bytes.
         // The ngx_buf_size macro returns the body size only: the size of the JWT or a partial size of the JWT, like 3764 bytes.
         // If the JWT content length is greater than the body buffer size, we must avoid reading past the end of the buffer.
-        body_buffer_size = ngx_buf_size(&request->upstream->buffer);
+        body_buffer_size = ngx_buf_size((&request->upstream->buffer));
         if (jwt_len > body_buffer_size)
         {
             // The standard solution to truncated responses, commonly used for long headers, is to configure an increased proxy_buffer_size.
