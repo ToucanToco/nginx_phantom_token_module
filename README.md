@@ -33,11 +33,14 @@ git push origin v1.0.0
 ```
 
 
-## Configuration Directives
+## Module Configuration Directives
+
+Version 2.0 introduced a **BREAKING CHANGE** to use updated configuration directives.\
+See [previous configuration instructions](https://github.com/curityio/nginx_phantom_token_module/tree/1.6.0) to configure older releases.
 
 ### Required Configuration Directives
 
-All the directives in this subsection are required; if any of these are omitted, the module will be disabled.
+The directives in this subsection are required; if any of these are omitted, the module will be disabled.
 
 #### phantom_token
 
@@ -47,26 +50,6 @@ All the directives in this subsection are required; if any of these are omitted,
 >
 > **Context**: `location`
 
-#### phantom_token_client_credential
-
-> **Syntax**: **`phantom_token_client_credential`** _`string`_ _`string`_
->
-> **Default**: *`—`*
->
-> **Context**: `location`
-
-The client ID and secret of the OAuth client which will be used for introspection. The first argument to this directive is the client ID and the second is the secret. The maximum total length of the two arguments must be less than 255 characters. Both should be printable ASCII values; non-ASCII values _may_ work but are untested. If this directive is not configured, then the module will be disabled.
-
-#### phantom_token_client_credential_file
-
-> **Syntax**: **`phantom_token_client_credential_file`** _`string`_ _`string`_
->
-> **Default**: *`—`*
->
-> **Context**: `location`
-
-The client ID and secret file of the OAuth client which will be used for introspection. The first argument to this directive is the client ID and the second is the secret file containing the secret string (trailing `\n` are trimmed). The maximum total length of the client ID and client secret must be less than 255 characters. Both should be printable ASCII values; non-ASCII values _may_ work but are untested. If this directive is not configured, then the module will be disabled.
-
 #### phantom_token_introspection_endpoint
 
 > **Syntax**: **`phantom_token_introspection_endpoint`** _`string`_
@@ -75,22 +58,6 @@ The client ID and secret file of the OAuth client which will be used for introsp
 >
 > **Context**: `location`
 
-The name of the location that proxies requests to the Curity Identity Server. Note that this location needs to be in the same server as the one referring to it using this directive.
-
-Example configuration:
-
-```nginx
-server {
-    location /api {
-        ...
-        phantom_token_introspection_endpoint my_good_location_name_for_curity;
-    }
-
-    location my_good_location_name_for_curity {
-        ...
-    }
-}
-```
 
 ### Optional Configuration Directives
 
@@ -167,6 +134,35 @@ load_module modules/ngx_curity_http_phantom_token_module.so;
 
 The file can be an absolute or relative path. If it is not absolute, it should be relative to the NGINX root directory.
 
+### NGINX Parameters for the Introspection Endpoint
+
+You must also configure the following NGINX parameters for the introspection subrequest:
+
+```nginx
+location curity {
+    internal;
+    proxy_pass_request_headers off;
+    proxy_set_header Accept "application/jwt";
+    proxy_set_header Content-Type "application/x-www-form-urlencoded";
+    proxy_set_header Authorization "Basic bXlfY2xpZW50X2lkOm15X2NsaWVudF9zZWNyZXQ=";
+    proxy_pass "https://curity.example.com/oauth/v2/oauth-introspect";
+}
+```
+
+| Introspection Setting | Description |
+| --------------------- | ----------- |
+| internal | Prevent the introspection endpoint being externally available. |
+| proxy_pass_request_headers | Set to off to avoid using the main request's headers in the introspection subrequest. |
+| Accept header | Configure a fixed value of `application/jwt`. |
+| Content-Type header | Configure a fixed value of `application/x-www-form-urlencoded`. |
+| Authorization header | Configure a basic credential with the introspection client ID and client secret. |
+
+To get the basic credential, concatenate the client ID, a colon character and the client secret, then base64 encode them. The following command provides an example.
+
+```bash
+echo -n "my_client_id:my_client_secret" | base64
+```
+
 ### Simple Configuration
 
 The following is a simple configuration that might be used in demo or development environments where the NGINX reverse proxy is on the same host as the Curity Identity Server:
@@ -174,15 +170,18 @@ The following is a simple configuration that might be used in demo or developmen
 ```nginx
 server {
     location /api {
-        proxy_pass         https://example.com/api;
-
         phantom_token on;
-        phantom_token_client_credential "client_id" "client_secret";
         phantom_token_introspection_endpoint curity;
+        proxy_pass https://example.com/api;
     }
 
     location curity {
-        proxy_pass "https://curity.example.com/oauth/v2/introspection";
+        internal;
+        proxy_pass_request_headers off;
+        proxy_set_header Accept "application/jwt";
+        proxy_set_header Content-Type "application/x-www-form-urlencoded";
+        proxy_set_header Authorization "Basic bXlfY2xpZW50X2lkOm15X2NsaWVudF9zZWNyZXQ=";
+        proxy_pass "https://curity.example.com/oauth/v2/oauth-introspect";
     }
 }
 ```
@@ -195,18 +194,20 @@ The following is a more complex configuration where the NGINX reverse proxy is o
 server {
     server_name server1.example.com;n
     location /api {
-        proxy_pass         https://example.com/api;
-
         phantom_token on;
-        phantom_token_client_credential "client_id" "client_secret";
         phantom_token_introspection_endpoint curity;
-
         phantom_token_realm "myGoodAPI";
         phantom_token_scopes "scope_a scope_b scope_c";
+        proxy_pass https://example.com/api;
     }
 
     location curity {
-        proxy_pass "https://server2.example.com:8443/oauth/v2/introspection";
+        internal;
+        proxy_pass_request_headers off;
+        proxy_set_header Accept "application/jwt";
+        proxy_set_header Content-Type "application/x-www-form-urlencoded";
+        proxy_set_header Authorization "Basic bXlfY2xpZW50X2lkOm15X2NsaWVudF9zZWNyZXQ=";
+        proxy_pass "https://server2.example.com:8443/oauth/v2/oauth-introspect";
     }
 }
 
@@ -234,22 +235,26 @@ http {
     server {
         server_name server1.example.com;
         location /api {
-            proxy_pass         https://example.com/api;
-
             phantom_token on;
-            phantom_token_client_credential "client_id" "client_secret";
             phantom_token_introspection_endpoint curity;
             phantom_token_scopes "scope_a scope_b scope_c";
             phantom_token_realm "myGoodAPI";
+            proxy_pass https://example.com/api;
         }
 
         location curity {
-            proxy_pass "https://server2.example.com:8443/oauth/v2/introspection";
+            internal;
+            proxy_pass_request_headers off;
+            proxy_set_header Accept "application/jwt";
+            proxy_set_header Content-Type "application/x-www-form-urlencoded";
+            proxy_set_header Authorization "Basic bXlfY2xpZW50X2lkOm15X2NsaWVudF9zZWNyZXQ=";
 
             proxy_cache_methods POST;
             proxy_cache my_cache;
             proxy_cache_key $request_body;
             proxy_ignore_headers Set-Cookie;
+
+            proxy_pass "https://server2.example.com:8443/oauth/v2/oauth-introspect";
         }
     }
 
@@ -272,20 +277,25 @@ http {
     server {
         server_name server1.example.com;
         location /api {
-            proxy_pass         https://example.com/api;
-
             phantom_token on;
-            phantom_token_client_credential "client_id" "client_secret";
             phantom_token_introspection_endpoint curity;
             phantom_token_scopes "scope_a scope_b scope_c";
             phantom_token_realm "myGoodAPI";
+            proxy_pass https://example.com/api;
         }
 
         location curity {
-            proxy_pass "https://server2.example.com:8443/oauth/v2/introspection";
+            internal;
+            proxy_pass_request_headers off;
+            proxy_set_header Accept "application/jwt";
+            proxy_set_header Content-Type "application/x-www-form-urlencoded";
+            proxy_set_header Authorization "Basic bXlfY2xpZW50X2lkOm15X2NsaWVudF9zZWNyZXQ=";
+
             proxy_ignore_headers Set-Cookie;
             proxy_buffer_size 16k;
             proxy_buffers 4 16k;
+
+            proxy_pass "https://server2.example.com:8443/oauth/v2/oauth-introspect";
         }
     }
 
@@ -301,32 +311,35 @@ http {
 
 ## Compatibility
 
-This module is compatible with Curity Identity Server versions >= 2.2. It has been tested with NGINX 1.13.7 (NGINX Plus Release 14) and NGINX 1.13.10 (NGINX Plus Release 15). It is likely to work with other, newish versions of NGINX, but only these have been tested, pre-built and verified.
+The binary releases align with the 24 month supported release cycle of [NGINX Plus](https://docs.nginx.com/nginx/releases/) to keep the NGINX secure environment up to date. The module's code has also run to a production level with many previous NGINX releases.
 
-### Releases
+### Pre-Built Releases
 
 Pre-built binaries of this module are provided for the following versions of NGINX on the corresponding operating system distributions:
 
-|                                    | NGINX 1.25.5 / NGINX Plus R32 | NGINX 1.25.3 / NGINX Plus R31 | NGINX 1.25.1 / NGINX Plus R30 | NGINX 1.23.4 / NGINX Plus R29 | NGINX 1.23.2 / NGINX Plus R28 |
+|                                    | NGINX 1.27.4 / NGINX Plus R34 | NGINX 1.27.2 / NGINX Plus R33 | NGINX 1.25.5 / NGINX Plus R32 | NGINX 1.25.3 / NGINX Plus R31 | NGINX 1.25.1 / NGINX Plus R30 |
 | -----------------------------------|:-----------------------------:|:-----------------------------:|:-----------------------------:|:------------------------------:|:-----------------------------:|
-| Alpine                             | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/alpine.ngx_curity_http_phantom_token_module_1.25.5.so)          | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/alpine.ngx_curity_http_phantom_token_module_1.25.3.so)          | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/alpine.ngx_curity_http_phantom_token_module_1.25.1.so)          | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/alpine.ngx_curity_http_phantom_token_module_1.23.4.so)          | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/alpine.ngx_curity_http_phantom_token_module_1.23.2.so)          |
-| Debian 11.0 (Bullseye)             | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/debian.bullseye.ngx_curity_http_phantom_token_module_1.25.5.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/debian.bullseye.ngx_curity_http_phantom_token_module_1.25.3.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/debian.bullseye.ngx_curity_http_phantom_token_module_1.25.1.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/debian.bullseye.ngx_curity_http_phantom_token_module_1.23.4.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/debian.bullseye.ngx_curity_http_phantom_token_module_1.23.2.so) |
-| Debian 12.0 (Bookworm)             | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/debian.bookworm.ngx_curity_http_phantom_token_module_1.25.5.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/debian.bookworm.ngx_curity_http_phantom_token_module_1.25.3.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/debian.bookworm.ngx_curity_http_phantom_token_module_1.25.1.so) | X | X |
-| Ubuntu 20.04 LTS (Focal Fossa)     | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.20.04.ngx_curity_http_phantom_token_module_1.25.5.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.20.04.ngx_curity_http_phantom_token_module_1.25.3.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.20.04.ngx_curity_http_phantom_token_module_1.25.1.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.20.04.ngx_curity_http_phantom_token_module_1.23.4.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.20.04.ngx_curity_http_phantom_token_module_1.23.2.so)    |
-| Ubuntu 22.04 LTS (Jammy Jellyfish) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.22.04.ngx_curity_http_phantom_token_module_1.25.5.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.22.04.ngx_curity_http_phantom_token_module_1.25.3.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.22.04.ngx_curity_http_phantom_token_module_1.25.1.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.22.04.ngx_curity_http_phantom_token_module_1.23.4.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.22.04.ngx_curity_http_phantom_token_module_1.23.2.so)    |
-| Ubuntu 24.04 LTS (Noble Numbat) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/ubuntu.24.04.ngx_curity_http_phantom_token_module_1.25.5.so)    | X | X | X | X |
-| Amazon Linux 2                     | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/amzn2.ngx_curity_http_phantom_token_module_1.25.5.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/amzn2.ngx_curity_http_phantom_token_module_1.25.3.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/amzn2.ngx_curity_http_phantom_token_module_1.25.1.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/amzn2.ngx_curity_http_phantom_token_module_1.23.4.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/amzn2.ngx_curity_http_phantom_token_module_1.23.2.so)           |
-| Amazon Linux 2023                  | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/amzn2023.ngx_curity_http_phantom_token_module_1.25.5.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/amzn2023.ngx_curity_http_phantom_token_module_1.25.3.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/amzn2023.ngx_curity_http_phantom_token_module_1.25.1.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/amzn2023.ngx_curity_http_phantom_token_module_1.23.4.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/amzn2023.ngx_curity_http_phantom_token_module_1.23.2.so)           |
-| CentOS Stream 9.0+                 | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.25.5.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.25.3.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.25.1.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.23.4.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/1.6.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.23.2.so) |
+| Alpine                             | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/alpine.ngx_curity_http_phantom_token_module_1.27.4.so)          | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/alpine.ngx_curity_http_phantom_token_module_1.27.2.so)          | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/alpine.ngx_curity_http_phantom_token_module_1.25.5.so)          | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/alpine.ngx_curity_http_phantom_token_module_1.25.3.so)          | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/alpine.ngx_curity_http_phantom_token_module_1.25.1.so)          |
+| Debian 11.0 (Bullseye)             | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/debian.bullseye.ngx_curity_http_phantom_token_module_1.27.4.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/debian.bullseye.ngx_curity_http_phantom_token_module_1.27.2.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/debian.bullseye.ngx_curity_http_phantom_token_module_1.25.5.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/debian.bullseye.ngx_curity_http_phantom_token_module_1.25.3.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/debian.bullseye.ngx_curity_http_phantom_token_module_1.25.1.so) |
+| Debian 12.0 (Bookworm)             | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/debian.bookworm.ngx_curity_http_phantom_token_module_1.27.4.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/debian.bookworm.ngx_curity_http_phantom_token_module_1.27.2.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/debian.bookworm.ngx_curity_http_phantom_token_module_1.25.5.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/debian.bookworm.ngx_curity_http_phantom_token_module_1.25.3.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/debian.bookworm.ngx_curity_http_phantom_token_module_1.25.1.so) |
+| Ubuntu 20.04 LTS (Focal Fossa)     | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.20.04.ngx_curity_http_phantom_token_module_1.27.4.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.20.04.ngx_curity_http_phantom_token_module_1.27.2.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.20.04.ngx_curity_http_phantom_token_module_1.25.5.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.20.04.ngx_curity_http_phantom_token_module_1.25.3.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.20.04.ngx_curity_http_phantom_token_module_1.25.1.so)    |
+| Ubuntu 22.04 LTS (Jammy Jellyfish) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.22.04.ngx_curity_http_phantom_token_module_1.27.4.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.22.04.ngx_curity_http_phantom_token_module_1.27.2.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.22.04.ngx_curity_http_phantom_token_module_1.25.5.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.22.04.ngx_curity_http_phantom_token_module_1.25.3.so)    | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.22.04.ngx_curity_http_phantom_token_module_1.25.1.so)    |
+| Ubuntu 24.04 LTS (Noble Numbat) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.24.04.ngx_curity_http_phantom_token_module_1.27.4.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.24.04.ngx_curity_http_phantom_token_module_1.27.2.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/ubuntu.24.04.ngx_curity_http_phantom_token_module_1.25.5.so) | X | X |
+| Amazon Linux 2                     | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/amzn2.ngx_curity_http_phantom_token_module_1.27.4.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/amzn2.ngx_curity_http_phantom_token_module_1.27.2.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/amzn2.ngx_curity_http_phantom_token_module_1.25.5.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/amzn2.ngx_curity_http_phantom_token_module_1.25.3.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/amzn2.ngx_curity_http_phantom_token_module_1.25.1.so)           |
+| Amazon Linux 2023                  | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/amzn2023.ngx_curity_http_phantom_token_module_1.27.4.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/amzn2023.ngx_curity_http_phantom_token_module_1.27.2.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/amzn2023.ngx_curity_http_phantom_token_module_1.25.5.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/amzn2023.ngx_curity_http_phantom_token_module_1.25.3.so)           | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/amzn2023.ngx_curity_http_phantom_token_module_1.25.1.so)           |
+| CentOS Stream 9.0+                 | x | x | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.25.5.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.25.3.so) | [⇓](https://github.com/curityio/nginx_phantom_token_module/releases/download/2.0.0/centos.stream.9.ngx_curity_http_phantom_token_module_1.25.1.so) |
 
-## Status
-This module is fit for production usage.
+## Building From Source
 
-## Development Setup
-If you wish to build this module from source, in order to run against other NGINX versions, or to change the module's logic, see the [Development Wiki](https://github.com/curityio/nginx_phantom_token_module/wiki) for instructions.
+To build the latest code against older NGINX versions or Linux distributions, follow the instructions in the [Development Wiki](https://github.com/curityio/nginx_phantom_token_module/wiki).
+
+- [Build the Module](https://github.com/curityio/nginx_phantom_token_module/wiki/3.-Builds)
+- [Deploy the Module](https://github.com/curityio/nginx_phantom_token_module/wiki/4.-Testing-Deployment)
 
 ## More Information
+
 For more information about the Curity Identity Server, its capabilities, and how to use it to issue phantom tokens for microservices, visit [curity.io](https://curity.io/product/token-service/?=use-cases?tab=microservices). For background information on using the Curity Identity Server to secure API access, see our [API security resources](https://curity.io/resources/api-security).
 
 ## Licensing
+
 This software is copyright (C) 2022 Curity AB. It is open source software that is licensed under the [Apache v. 2](LICENSE). For commercial support of this module, please contact [Curity sales](mailto:sales@curity.io).
