@@ -1,7 +1,7 @@
 FROM alpine:3 AS builder
 
 RUN apk add --no-cache --virtual .build-deps \
-    gcc libc-dev make pcre2-dev zlib-dev linux-headers libxslt-dev \
+    gcc libc-dev make pcre2-dev pcre-dev  zlib-dev linux-headers libxslt-dev \
     gd-dev geoip-dev perl-dev libedit-dev mercurial alpine-sdk findutils bash
 
 COPY configure /tmp
