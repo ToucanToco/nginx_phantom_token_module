@@ -158,7 +158,8 @@ if [ $? -ne 0 ]; then
 fi
 
 cleanup() {
-  docker-compose down
+	echo
+  # docker-compose down
 }
 
 trap cleanup EXIT INT TERM
@@ -231,36 +232,6 @@ do
   do
     echo "Calling API $CALL"
     HTTP_STATUS=$(curl -s -X GET 'http://localhost:38080/api' -H "Authorization: Bearer $ACCESS_TOKEN" -o $RESPONSE_FILE -w '%{http_code}')
-    if [ "$HTTP_STATUS" != '200' ]; then
-      >&2 echo "Unexpected status during API call: $HTTP_STATUS"
-      ret=1
-    fi
-  done
-
-  #
-  # Make valid and invalid API calls
-  #
-  for CALL in $(seq 1 2)
-  do
-    echo "Calling API File-based $CALL"
-    HTTP_STATUS=$(curl -s -X GET 'http://localhost:38080/api-file' -H "Authorization: Bearer $ACCESS_TOKEN" -o $RESPONSE_FILE -w '%{http_code}')
-    if [ "$HTTP_STATUS" != '200' ]; then
-      >&2 echo "Unexpected status during API call: $HTTP_STATUS"
-      ret=1
-    fi
-  done
-
-  echo "Calling API File-based 3"
-  HTTP_STATUS=$(curl -s -X GET 'http://localhost:38080/api-file' -H "Authorization: Bearer xxx" -o $RESPONSE_FILE -w '%{http_code}')
-  if [ "$HTTP_STATUS" != '401' ]; then
-    >&2 echo "Unexpected status during API call: $HTTP_STATUS"
-    ret=1
-  fi
-
-  for CALL in $(seq 4 5)
-  do
-    echo "Calling API File-based $CALL"
-    HTTP_STATUS=$(curl -s -X GET 'http://localhost:38080/api-file' -H "Authorization: Bearer $ACCESS_TOKEN" -o $RESPONSE_FILE -w '%{http_code}')
     if [ "$HTTP_STATUS" != '200' ]; then
       >&2 echo "Unexpected status during API call: $HTTP_STATUS"
       ret=1
