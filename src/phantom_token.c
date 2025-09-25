@@ -200,6 +200,270 @@ static char *merge_location_configuration(ngx_conf_t *main_config, void *parent,
     return NGX_CONF_OK;
 }
 
+static ngx_table_elt_t *find_header_in(ngx_http_request_t *r, ngx_str_t key) {
+    ngx_list_part_t *part;
+    ngx_table_elt_t *h;
+    ngx_uint_t i;
+
+    part = &r->headers_in.headers.part;
+    h = part->elts;
+
+    for (i = 0;; i++) {
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
+
+            // Walk next part
+            part = part->next;
+            h = part->elts;
+            i = 0;
+        }
+
+        if (h[i].key.len != key.len ||
+            ngx_strncasecmp(h[i].key.data, key.data, key.len) != 0) {
+            continue; // Continue if not matched
+        }
+
+        // Found
+        return &h[i];
+    }
+    return NULL;
+}
+
+/**
+ * Remove an element from the list and the part that contains it.
+ *
+ * Ref:
+ * https://github.com/openresty/headers-more-nginx-module/blob/84a65d68687c9de5166fd49ddbbd68c6962234eb/src/ngx_http_headers_more_util.c#L265-L382
+ */
+ngx_int_t ngx_http_headers_more_rm_header_helper(ngx_list_t *l,
+                                                 ngx_list_part_t *cur,
+                                                 ngx_uint_t i) {
+    ngx_table_elt_t *data;
+    ngx_list_part_t *new, *part;
+
+    data = cur->elts;
+
+    if (i == 0) {
+        cur->elts = (char *)cur->elts + l->size;
+        cur->nelts--;
+
+        if (cur == l->last) {
+            if (cur->nelts == 0) {
+#if 1
+                part = &l->part;
+
+                if (part == cur) {
+                    cur->elts = (char *)cur->elts - l->size;
+                    /* do nothing */
+
+                } else {
+                    while (part->next != cur) {
+                        if (part->next == NULL) {
+                            return NGX_ERROR;
+                        }
+
+                        part = part->next;
+                    }
+
+                    l->last = part;
+                    part->next = NULL;
+                    l->nalloc = part->nelts;
+                }
+#endif
+
+            } else {
+                l->nalloc--;
+            }
+
+            return NGX_OK;
+        }
+
+        if (cur->nelts == 0) {
+            part = &l->part;
+
+            if (part == cur) {
+                assert(cur->next != NULL);
+
+                if (l->last == cur->next) {
+                    l->part = *(cur->next);
+                    l->last = part;
+                    l->nalloc = part->nelts;
+
+                } else {
+                    l->part = *(cur->next);
+                }
+
+            } else {
+                while (part->next != cur) {
+                    if (part->next == NULL) {
+                        return NGX_ERROR;
+                    }
+
+                    part = part->next;
+                }
+
+                part->next = cur->next;
+            }
+
+            return NGX_OK;
+        }
+
+        return NGX_OK;
+    }
+
+    if (i == cur->nelts - 1) {
+        cur->nelts--;
+
+        if (cur == l->last) {
+            l->nalloc = cur->nelts;
+        }
+
+        return NGX_OK;
+    }
+
+    new = ngx_palloc(l->pool, sizeof(ngx_list_part_t));
+    if (new == NULL) {
+        return NGX_ERROR;
+    }
+
+    new->elts = &data[i + 1];
+    new->nelts = cur->nelts - i - 1;
+    new->next = cur->next;
+
+    cur->nelts = i;
+    cur->next = new;
+    if (cur == l->last) {
+        l->last = new;
+        l->nalloc = new->nelts;
+    }
+
+    return NGX_OK;
+}
+
+/**
+ * Set the header with the given key from the list.
+ *
+ * Ref:
+ * https://github.com/nginx/nginx/blob/d31305653701bd99e8e5e6aa48094599a08f9f12/src/core/ngx_list.h#L55-L78
+ * https://github.com/openresty/headers-more-nginx-module/blob/84a65d68687c9de5166fd49ddbbd68c6962234eb/src/ngx_http_headers_more_headers_in.c#L220-L221
+ */
+static ngx_int_t set_header_helper(ngx_http_request_t *r, ngx_str_t key,
+                                   ngx_str_t value,
+                                   ngx_table_elt_t **output_header) {
+    ngx_list_part_t *part;
+    ngx_table_elt_t *h, *matched;
+    ngx_uint_t rc;
+    ngx_uint_t i;
+
+    matched = NULL;
+
+retry:
+
+    part = &r->headers_in.headers.part;
+    h = part->elts;
+
+    // Replace logic
+    for (i = 0;; i++) {
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
+
+            // Walk next part
+            part = part->next;
+            h = part->elts;
+            i = 0;
+        }
+
+        if (h[i].key.len == key.len &&
+            ngx_strncasecmp(h[i].key.data, key.data, key.len) == 0) {
+            goto matched;
+        }
+
+        /* not matched */
+
+        continue;
+
+    matched:
+
+        // If value is 0, remove the header. If there are duplicates, remove
+        // them all.
+        if (value.len == 0 || (matched && matched != &h[i])) {
+            rc = ngx_http_headers_more_rm_header_helper(&r->headers_in.headers,
+                                                        part, i);
+
+            assert(
+                !(r->headers_in.headers.part.next == NULL &&
+                  r->headers_in.headers.last != &r->headers_in.headers.part));
+
+            if (rc == NGX_OK) {
+                if (output_header) { // If output_header is set to old header,
+                                     // this clears it.
+                    *output_header = NULL;
+                }
+                goto retry; // Make sure to clean all occurrences.
+            }
+
+            return NGX_ERROR;
+        }
+
+        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                       "Replacing header with the same key %V", &key);
+        h[i].value = value;
+        if (output_header) {
+            *output_header = &h[i];
+        }
+        if (matched == NULL) {
+            matched = &h[i];
+        }
+    }
+
+    if (matched) {
+        return NGX_OK;
+    }
+
+    if (value.len == 0) {
+        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                       "Removed header %V", &key);
+        return NGX_OK;
+    }
+
+    if (r->headers_in.headers.last == NULL) {
+        /* must be 400 bad request */
+        return NGX_OK;
+    }
+
+    // Add logic (field was not found)
+    h = ngx_list_push(&r->headers_in.headers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+    h->hash = 1;
+    h->key = key;
+    h->value = value;
+#if defined(nginx_version) && nginx_version >= 1023000
+    h->next = NULL;
+#endif
+    h->lowcase_key = ngx_pnalloc(r->pool, h->key.len);
+    if (h->lowcase_key == NULL) {
+        return NGX_ERROR;
+    }
+    ngx_strlow(h->lowcase_key, h->key.data, h->key.len);
+
+    if (output_header) {
+        *output_header = h;
+    }
+
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "Added header "
+                   "with key %V",
+                   &key);
+
+    return NGX_OK;
+}
+
 /**
  * The main handler logic
  */
@@ -241,17 +505,27 @@ ngx_int_t handler(ngx_http_request_t *request)
         {
             if (module_context->status == NGX_HTTP_OK)
             {
-                // Introspection was successful - replace the incoming authorization header with one that has the JWT
-                request->headers_in.authorization->value.len = module_context->jwt.len;
-                request->headers_in.authorization->value.data = module_context->jwt.data;
+                // Introspection was successful. Replace the incoming
+                // Authorization header with one that has the JWT.
+                static ngx_str_t authorization = ngx_string("Authorization");
+                set_header_helper(request, authorization, module_context->jwt,
+                                  &request->headers_in.authorization);
                 return NGX_OK;
             }
             else if (module_context->status == NGX_HTTP_NO_CONTENT)
             {
+                ngx_log_error(
+                    NGX_LOG_ERR, request->connection->log, 0,
+                    "Introspection request from %V failed with no content: %d",
+                    &request->connection->addr_text, module_context->status);
                 return utils_set_www_authenticate_header(request, module_location_config, NULL);
             }
             else if (module_context->status == NGX_HTTP_SERVICE_UNAVAILABLE)
             {
+                ngx_log_error(
+                    NGX_LOG_ERR, request->connection->log, 0,
+                    "Introspection request failed with service unavailable: %d",
+                    module_context->status);
                 return utils_write_error_response(request, NGX_HTTP_SERVICE_UNAVAILABLE, module_location_config);
             }
             else if (module_context->status >= NGX_HTTP_INTERNAL_SERVER_ERROR ||
@@ -259,9 +533,19 @@ ngx_int_t handler(ngx_http_request_t *request)
                      module_context->status == NGX_HTTP_UNAUTHORIZED ||
                      module_context->status == NGX_HTTP_FORBIDDEN)
             {
+                ngx_log_error(
+                    NGX_LOG_ERR, request->connection->log, 0,
+                    "Introspection request from %V failed with status code "
+                    "(server responded): %d",
+                    &request->connection->addr_text, module_context->status);
                 return utils_write_error_response(request, NGX_HTTP_BAD_GATEWAY, module_location_config);
             }
 
+            ngx_log_error(
+                NGX_LOG_ERR, request->connection->log, 0,
+                "Introspection request from %V failed with status code "
+                "(unknown error, see nginx error_logs): %d",
+                &request->connection->addr_text, module_context->status);
             return utils_write_error_response(request, NGX_HTTP_INTERNAL_SERVER_ERROR, module_location_config);
         }
 
@@ -278,23 +562,83 @@ ngx_int_t handler(ngx_http_request_t *request)
         return utils_set_www_authenticate_header(request, module_location_config, NULL);
     }
 
-    u_char *bearer_token_pos;
+    ngx_str_t bearer_token = ngx_null_string;
+    // Check if it's websocket
+    if (request->headers_in.upgrade &&
+        request->headers_in.upgrade->value.len > 0 &&
+        !ngx_strncasecmp(request->headers_in.upgrade->value.data,
+                         (u_char *)"websocket", 9)) {
 
-    if ((bearer_token_pos = ngx_strcasestrn((u_char*)request->headers_in.authorization->value.data,
-        (char*)BEARER, BEARER_SIZE - 1)) == NULL)
-    {
-        // return unauthorized when Authorization header is not Bearer
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->connection->log, 0, "Authorization header does not contain a bearer token");
-        return utils_set_www_authenticate_header(request, module_location_config, NULL);
+        ngx_log_error(NGX_LOG_NOTICE, request->connection->log, 0,
+                      "GraphQL WebSocket introspection request from %V",
+                      &request->uri);
+
+        // Get bearer from Sec-Websocket-Protocol header
+        static ngx_str_t sec_websocket_protocol =
+            ngx_string("Sec-WebSocket-Protocol");
+        ngx_table_elt_t *sec_websocket_protocol_header =
+            find_header_in(request, sec_websocket_protocol);
+        if (sec_websocket_protocol_header == NULL) {
+            // No Sec-WebSocket-Protocol header found
+            ngx_log_error(NGX_LOG_WARN, request->connection->log, 0,
+                          "No Sec-WebSocket-Protocol header found, "
+                          "not eligible for introspection");
+            return utils_set_www_authenticate_header(
+                request, module_location_config, NULL);
+        }
+
+        if (sec_websocket_protocol_header->value.len == 0) {
+            // Empty Sec-WebSocket-Protocol header found
+            ngx_log_error(NGX_LOG_WARN, request->connection->log, 0,
+                          "Empty Sec-WebSocket-Protocol header found, not "
+                          "eligible for introspection");
+            return utils_set_www_authenticate_header(
+                request, module_location_config, NULL);
+        }
+
+        // Sec-WebSocket-Protocol is a multi value comma separated header,
+        // search for "Bearer_" Loop over the header value length
+        bearer_token.data =
+            ngx_strcasestrn((u_char *)sec_websocket_protocol_header->value.data,
+                            (char *)BEARER, BEARER_SIZE - 1);
+        bearer_token.len =
+            sec_websocket_protocol_header->value.len -
+            (bearer_token.data - sec_websocket_protocol_header->value.data);
+    } else if (request->headers_in.authorization &&
+               request->headers_in.authorization->value.len > 0) {
+        bearer_token.data = ngx_strcasestrn(
+            (u_char *)request->headers_in.authorization->value.data,
+            (char *)BEARER, BEARER_SIZE - 1);
+        bearer_token.len =
+            request->headers_in.authorization->value.len -
+            (bearer_token.data - request->headers_in.authorization->value.data);
     }
 
-    bearer_token_pos += BEARER_SIZE;
+    if (bearer_token.data == NULL) {
+        ngx_log_error(NGX_LOG_ERR, request->connection->log, 0,
+                      "Authorization header does not contain a bearer token");
+
+        return utils_set_www_authenticate_header(request,
+                                                 module_location_config, NULL);
+    }
+
+    // Skip "Bearer "
+    bearer_token.data += BEARER_SIZE;
+    bearer_token.len -= BEARER_SIZE;
 
     // Remove any extra whitespace after the "Bearer " part of the authorization request header
-    while (isspace(*bearer_token_pos))
-    {
-        bearer_token_pos++;
+    while (isspace(*bearer_token.data)) {
+        bearer_token.data++;
+        bearer_token.len--;
     }
+
+    // Read until the next comma or space or nothing
+    ngx_uint_t i = 0;
+    while (i < bearer_token.len && !isspace(bearer_token.data[i]) &&
+           bearer_token.data[i] != ',') {
+        i++;
+    }
+    bearer_token.len = i;
 
     module_context = ngx_pcalloc(request->pool, sizeof(phantom_token_module_context_t));
     if (module_context == NULL)
@@ -322,7 +666,9 @@ ngx_int_t handler(ngx_http_request_t *request)
     }
 
     // extract access token from header
-    u_char *introspect_body_data = ngx_pcalloc(request->pool, request->headers_in.authorization->value.len);
+    u_char *introspect_body_data =
+        ngx_pcalloc(request->pool,
+                    6 + bearer_token.len); // len("token=") + bearer_token.len
     if (introspect_body_data == NULL)
     {
         utils_log_memory_allocation_error(request, "introspect_body_data");
@@ -336,10 +682,11 @@ ngx_int_t handler(ngx_http_request_t *request)
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    ngx_snprintf(introspect_body_data, request->headers_in.authorization->value.len, "token=%s", bearer_token_pos);
+    ngx_snprintf(introspect_body_data, 6 + bearer_token.len, "token=%V",
+                 &bearer_token);
 
     introspection_body->data = introspect_body_data;
-    introspection_body->len = ngx_strlen(introspection_body->data);
+    introspection_body->len = 6 + bearer_token.len;
 
     ngx_http_request_body_t *introspection_request_body = ngx_pcalloc(request->pool, sizeof(ngx_http_request_body_t));
     if (introspection_request_body == NULL)
